@@ -56,7 +56,7 @@ def _get_disposition(part):
 _IMAGE_EXTENSIONS = frozenset({"png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico"})
 
 
-def _guess_image_ct(ct: str, filename: str) -> bool:
+def _guess_image_ct(filename: str) -> bool:
     """当 MIME 类型不是 image/* 时，通过文件名后缀判断是否实际为图片。"""
     if not filename:
         return False
@@ -117,7 +117,7 @@ def parse_email(msg) -> ParseResult:
         if cid_raw and payload:
             if ct.startswith("image/"):
                 cid_map[cid_raw] = (ct, base64.b64encode(payload).decode("ascii"))
-            elif _guess_image_ct(ct, filename):
+            elif _guess_image_ct(filename):
                 # 部分邮件客户端将图片错误标记为 application/octet-stream。
                 # 通过文件名后缀回退检测，修正 data URI 中的 MIME 类型。
                 ext = filename.rsplit(".", 1)[-1].lower()
@@ -134,31 +134,11 @@ def parse_email(msg) -> ParseResult:
     )
 
 
-def embed_cid_images(html_content: str, cid_map: dict) -> str:
-    """将 HTML 中的 cid: 图片引用替换为 data: URI（base64 内嵌）。"""
-    if not cid_map:
-        return html_content
-
-    def _replace(match):
-        quote = match.group(1)
-        cid = match.group(2)
-        if cid in cid_map:
-            mime_type, b64 = cid_map[cid]
-            return f'src={quote}data:{mime_type};base64,{b64}{quote}'
-        return match.group(0)
-
-    return re.sub(
-        r'src=(["\'])cid:([^"\'#?\s]+)\1',
-        _replace,
-        html_content,
-    )
-
-
 def embed_cid_images_as_files(html_content: str, cid_map: dict,
                               save_dir: str, url_prefix: str = "") -> Tuple[str, List[dict]]:
     """将 HTML 中的 cid: 图片保存为磁盘文件，替换引用为文件名（相对路径）。
 
-    与 ``embed_cid_images`` 不同，本函数不将图片 base64 内嵌，而是把图片
+    本函数不将图片 base64 内嵌，而是把图片
     写入 *save_dir* 目录，并在 HTML 中仅保留文件名引用。调用方通过相对路径
     拼接即可让 HTML / Markdown 正确加载图片，大幅减小输出体积。
 

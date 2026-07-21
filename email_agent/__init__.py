@@ -1,1 +1,1 @@
-"""Email Agent — 拉取 IMAP 邮件并生成 HTML 归档文件。"""
+"""Email Agent — IMAP 邮件拉取、HTML/Markdown 归档、AI 日报生成与 SMTP 发送。"""

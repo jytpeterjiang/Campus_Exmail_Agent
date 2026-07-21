@@ -13,6 +13,10 @@ password =
 # ── 日报邮件发送目标（为空则发送给自己） ──
 send_to =
 
+# ── AI 模型 ──
+# 默认 deepseek-v4-flash，可按需更换
+model_name = deepseek-v4-flash
+
 # ── 输出格式 ──
 # "html" | "markdown" | "both"（默认）
 output_format = both

@@ -12,6 +12,12 @@ from pathlib import Path
 
 from email_agent.ai.date_parser import expand_dates
 from email_agent.digest.builder import generate_single_day, aggregate_summaries
+from email_agent.local_data import (
+    get_summary_path,
+    get_aggregate_path,
+    mail_count,
+    classify_dates,
+)
 
 
 # ═══════════════════════════════════════════════════════
@@ -62,11 +68,11 @@ def run(date_spec: dict, output_dir: Path) -> tuple:
         # 单日：直接返回那一天的日报
         d = available[0]
         content = daily_summaries[d]
-        path = output_dir / d / f"{d}-summary.md"
+        path = get_summary_path(d)
         return content, path
     else:
         # 多日：先检查聚合报告是否已存在
-        path = _resolve_aggregate_path(date_spec, output_dir)
+        path = get_aggregate_path(date_spec["range"]["start"], date_spec["range"]["end"])
         if path.exists():
             print(f"  ✅ 汇总报告已存在: {path}")
             return path.read_text(encoding="utf-8"), path
@@ -95,23 +101,26 @@ def _check_local_emails(
 ) -> list[str]:
     """检查本地邮件归档是否存在，缺失时提示用户手动拉取。
 
+    委托 email_agent.local_data.classify_dates 进行三分法分类：
+    - 完整：历史日期 + .fetch_complete 标记存在
+    - 不完整：有邮件文件但无 .fetch_complete（如 -n 5 部分拉取）
+    - 缺失：无任何邮件文件
+
     Returns
     -------
     list[str]
-        已有 .md 邮件文件的日期列表。
+        已有 .md 邮件文件的日期列表（完整 + 不完整均可生成日报）。
     """
-    available = []
-    missing = []
-    for d in date_list:
-        md_dir = output_dir / d / "markdown"
-        if md_dir.exists() and list(md_dir.glob("*.md")):
-            available.append(d)
-        else:
-            missing.append(d)
+    complete, partial, missing = classify_dates(date_list)
+    available = complete + partial
 
     if missing:
         print(f"\n⚠️ 以下日期缺少本地邮件归档: {', '.join(missing)}")
         print(f"   请先手动拉取: python fetch_email.py --on {' '.join(missing)} --all --format markdown")
+        print()
+    if partial:
+        print(f"\n💡 以下日期归档不完整（可能为部分拉取）: {', '.join(partial)}")
+        print(f"   建议全量拉取: python fetch_email.py --on {' '.join(partial)} --all --format markdown")
         print()
 
     return available
@@ -134,7 +143,7 @@ def _ensure_daily_summaries(
     daily_summaries: dict[str, str] = {}
 
     for d in date_list:
-        summary_path = output_dir / d / f"{d}-summary.md"
+        summary_path = get_summary_path(d)
 
         if summary_path.exists():
             print(f"  ✅ {d} 已有日报，跳过")
@@ -162,7 +171,7 @@ def _resolve_aggregate_path(date_spec: dict, output_dir: Path) -> Path:
     """根据 date_spec 推断聚合报告的文件路径。"""
     start = date_spec["range"]["start"]
     end = date_spec["range"]["end"]
-    return output_dir / f"{start}_{end}-summary.md"
+    return get_aggregate_path(start, end)
 
 
 # ═══════════════════════════════════════════════════════
@@ -175,11 +184,7 @@ def _save_aggregate_summary(
     """保存多日汇总报告。"""
     start = date_spec["range"]["start"]
     end = date_spec["range"]["end"]
-
-    if start == end:
-        path = output_dir / f"{start}-summary.md"
-    else:
-        path = output_dir / f"{start}_{end}-summary.md"
+    path = get_aggregate_path(start, end)
 
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")

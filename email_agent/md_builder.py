@@ -1,6 +1,7 @@
 """Markdown 归档文件生成。调用 html2markdown CLI 将 HTML 转为 Markdown。"""
 import os
 import subprocess
+import sys
 from typing import List, Optional
 from urllib.parse import quote
 
@@ -15,8 +16,13 @@ _HTML2MD_EXE = os.path.join(
 def html_to_markdown(html_content: str) -> str:
     """调用 html2markdown CLI 将 HTML 转为 Markdown。
 
-    要求 ``html-to-markdown/html2markdown.exe`` 存在。
+    要求 ``html-to-markdown/html2markdown.exe`` 存在（仅支持 Windows）。
     """
+    if sys.platform != "win32":
+        raise RuntimeError(
+            "html2markdown.exe 仅支持 Windows 平台。"
+            "在 Linux/macOS 上请使用 html2text 库作为替代。"
+        )
     result = subprocess.run(
         [_HTML2MD_EXE, "--plugin-table", "--plugin-strikethrough"],
         input=html_content,

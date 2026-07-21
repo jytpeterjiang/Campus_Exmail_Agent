@@ -6,11 +6,12 @@ import email.utils
 import os
 import sys
 
-from email_agent.config import SAVE_ATTACHMENTS, OUTPUT_DIR_NAME
+from email_agent.config import SAVE_ATTACHMENTS, OUTPUT_DIR_NAME, EMAIL as SELF_EMAIL
 from email_agent.imap_client import fetch_emails, IMAPError
 from email_agent.parser import parse_email, ParseResult, embed_cid_images_as_files
 from email_agent.html_builder import build_html
 from email_agent.md_builder import build_md, html_to_markdown
+from email_agent.local_data import mark_fetch_complete
 from email_agent.utils import decode_header_value, sanitize_filename
 
 
@@ -36,14 +37,53 @@ def _save_attachments(result: ParseResult, save_dir: str) -> None:
         att.saved_path = filepath
 
 
-def _process_email(mid: str, msg, output_dir: str, fmt: str = "both") -> None:
-    """处理单封邮件：解析 → 落盘 CID 图片 → 保存附件 → 生成 HTML/Markdown。"""
+def _build_email_dirs(output_dir: str, date_dir: str, safe_name: str, ts_str: str):
+    """构建邮件归档所需的目录路径。返回 (html_dir, md_dir, att_save_dir, att_rel_dir)。"""
+    att_rel_dir = f"{safe_name}_{ts_str}"
+    html_dir = os.path.join(output_dir, date_dir, "html")
+    md_dir   = os.path.join(output_dir, date_dir, "markdown")
+    att_save_dir = os.path.join(output_dir, date_dir, "attachments", att_rel_dir)
+    return html_dir, md_dir, att_save_dir, att_rel_dir
+
+
+def _merge_attachments(result, inline_files: list) -> list:
+    """合并真实附件和内嵌文件为统一的 dict 列表。"""
+    att_dicts = [
+        {
+            "filename":    a.filename,
+            "mime_type":   a.mime_type,
+            "size":        a.size,
+            "disposition": a.disposition,
+            "saved_path":  a.saved_path,
+        }
+        for a in result.attachments
+        if a.disposition == "attachment"
+    ]
+    return att_dicts + inline_files
+
+
+def _process_email(mid: str, msg, output_dir: str, fmt: str = "both") -> str | None:
+    """处理单封邮件：解析 → 落盘 CID 图片 → 保存附件 → 生成 HTML/Markdown。
+
+    Returns
+    -------
+    str or None
+        邮件所属日期目录（如 "2026-07-18"），跳过时返回 None。
+    """
     subject   = decode_header_value(msg.get("Subject"))
     from_addr = decode_header_value(msg.get("From"))
     to_addr   = decode_header_value(msg.get("To"))
     cc_addr   = decode_header_value(msg.get("Cc"))
     bcc_addr  = decode_header_value(msg.get("Bcc"))
     date_raw  = msg.get("Date", "(无)")
+
+    # ═══ 跳过自己发送的邮件（如日报回发，避免反馈循环） ═══
+    from_addr_pure = email.utils.parseaddr(from_addr)[1].lower()
+    self_email = SELF_EMAIL.lower()
+    if from_addr_pure == self_email:
+        print(f"[跳过] 来自自己的邮件: {subject}", file=sys.stderr)
+        return None
+    # ═══════════════════════════════════════════════════════
 
     result = parse_email(msg)
 
@@ -56,12 +96,9 @@ def _process_email(mid: str, msg, output_dir: str, fmt: str = "both") -> None:
         date_dir = "unknown_date"
 
     safe_name = sanitize_filename(subject if subject != "(无)" else "无主题")
-    att_rel_dir = f"{safe_name}_{ts_str}"
-
-    # ── 目录结构（按日期分组）──
-    html_dir = os.path.join(output_dir, date_dir, "html")
-    md_dir   = os.path.join(output_dir, date_dir, "markdown")
-    att_save_dir = os.path.join(output_dir, date_dir, "attachments", att_rel_dir)
+    html_dir, md_dir, att_save_dir, att_rel_dir = _build_email_dirs(
+        output_dir, date_dir, safe_name, ts_str
+    )
 
     # ── CID 图片落盘 + 替换 HTML 中的 cid: 引用 ──
     body_html_with_paths, inline_files = embed_cid_images_as_files(
@@ -74,18 +111,7 @@ def _process_email(mid: str, msg, output_dir: str, fmt: str = "both") -> None:
         _save_attachments(result, att_save_dir)
 
     # ── 合并附件列表（统一 dict 格式）──
-    att_dicts = [
-        {
-            "filename":    a.filename,
-            "mime_type":   a.mime_type,
-            "size":        a.size,
-            "disposition": a.disposition,
-            "saved_path":  a.saved_path,
-        }
-        for a in result.attachments
-        if a.disposition == "attachment"
-    ]
-    all_files = att_dicts + inline_files  # inline_files 已含 disposition="inline"
+    all_files = _merge_attachments(result, inline_files)
 
     # 正文内容（用于 HTML / Markdown 构建）
     body_final = body_html_with_paths if result.body_type == "text/html" else result.body_html
@@ -153,6 +179,8 @@ def _process_email(mid: str, msg, output_dir: str, fmt: str = "both") -> None:
         print(f"  附件已保存到: {att_save_dir}  ({len(saved_att)} 个文件)", file=sys.stderr)
     print(file=sys.stderr)
 
+    return date_dir
+
 
 def _progress_bar(current: int, total: int, width: int = 30) -> str:
     """生成进度条字符串。
@@ -177,7 +205,7 @@ def _progress_bar(current: int, total: int, width: int = 30) -> str:
     return f"[{bar}] {current}/{total} ({pct * 100:.1f}%)"
 
 
-def main(n=None, fmt: str = "both", since: str = None, before: str = None) -> None:
+def main(n=None, fmt: str = "both", since: str = None, before: str = None, on_count=None) -> None:
     """主流程：获取邮件 → 逐封归档（边下载边处理）。
 
     Parameters
@@ -190,9 +218,11 @@ def main(n=None, fmt: str = "both", since: str = None, before: str = None) -> No
         起始日期（含），``"YYYY-MM-DD"`` 格式。
     before : str or None
         截止日期（不含），``"YYYY-MM-DD"`` 格式。
+    on_count : callable or None
+        透传给 ``fetch_emails`` 的确认回调。
     """
     try:
-        emails_gen = fetch_emails(n=n, since=since, before=before)
+        emails_gen = fetch_emails(n=n, since=since, before=before, on_count=on_count)
     except IMAPError as e:
         print(f"[错误] {e}", file=sys.stderr)
         return
@@ -205,17 +235,26 @@ def main(n=None, fmt: str = "both", since: str = None, before: str = None) -> No
 
     idx = 0
     total = 0
+    fetched_dates: set[str] = set()
     try:
         for mid, msg, current, total in emails_gen:
             idx = current
             if total > 1:
                 print(f"\r{_progress_bar(current, total)}\n", end="", file=sys.stderr, flush=True)
-            _process_email(mid, msg, output_dir, fmt=fmt)
+            date_dir = _process_email(mid, msg, output_dir, fmt=fmt)
+            if date_dir:
+                fetched_dates.add(date_dir)
         if total > 1:
             print("全部完成!", file=sys.stderr)
     except KeyboardInterrupt:
         print(f"\n\n[中断] 用户取消操作，已处理 {idx}/{total} 封邮件。", file=sys.stderr)
         return
+
+    # ── 全量拉取（n is None）完成后标记对应日期为完整归档 ──
+    if n is None and fetched_dates:
+        for d in fetched_dates:
+            mark_fetch_complete(d)
+        print(f"✅ 已标记 {len(fetched_dates)} 个日期为完整归档。", file=sys.stderr)
 
 
 

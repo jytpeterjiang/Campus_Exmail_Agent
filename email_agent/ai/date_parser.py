@@ -3,6 +3,15 @@
 from datetime import datetime, timedelta
 
 
+def date_to_since_before(date_str: str) -> tuple[str, str]:
+    """单日期字符串 -> IMAP 查询所需的 (since, before)。
+
+    before = date + 1 天，因为 IMAP SEARCH BEFORE 不含当天。
+    """
+    d = datetime.strptime(date_str, "%Y-%m-%d")
+    return date_str, (d + timedelta(days=1)).strftime("%Y-%m-%d")
+
+
 def expand_dates(date_spec: dict) -> list[str]:
     """将日期规格展开为具体日期列表。
 

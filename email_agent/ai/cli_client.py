@@ -8,10 +8,13 @@ import json
 import locale
 import os
 import re
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
 from typing import Optional
+
+from email_agent import config
 
 
 class CLIClientError(Exception):
@@ -132,26 +135,26 @@ def query(
     use_shell = (codebuddy_path == "codebuddy")
 
     if use_shell:
-        # shell=True 模式，拼接完整命令字符串
+        # shell=True 模式，用 shlex.join 安全拼接命令字符串
         parts = [
             "codebuddy",
-            "-p", f'"{prompt}"',
-            "--model", "deepseek-v4-flash",
+            "-p", prompt,
+            "--model", config.MODEL_NAME,
             "--max-turns", str(max_turns),
             "--permission-mode", "auto",
             "-y",
         ]
         if system_prompt:
-            parts.extend(["--append-system-prompt", f'"{system_prompt}"'])
+            parts.extend(["--append-system-prompt", system_prompt])
         if add_dirs:
             for d in add_dirs:
                 parts.extend(["--add-dir", str(d.resolve())])
-        cmd = " ".join(parts)
+        cmd = shlex.join(parts)
     else:
         cmd = [
             codebuddy_path,
             "-p", prompt,
-            "--model", "deepseek-v4-flash",
+            "--model", config.MODEL_NAME,
             "--max-turns", str(max_turns),
             "--permission-mode", "auto",
             "-y",
@@ -191,7 +194,7 @@ def query_json(
     *,
     system_prompt: Optional[str] = None,
     max_turns: int = 5,
-    timeout: int = 30,
+    timeout: int = 30,  # 较 query() 的 60s 更短：max_turns 同样减半（5 vs 10），超时按比例缩减
     cwd: Optional[Path] = None,
 ) -> Optional[dict]:
     """调用 CLI 并尝试从 stdout 提取 JSON。

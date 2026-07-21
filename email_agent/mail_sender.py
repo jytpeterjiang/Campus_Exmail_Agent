@@ -4,12 +4,13 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.utils import formatdate, make_msgid
+from typing import Optional
 
 
 def send_markdown_mail(
     markdown_body: str,
     subject: str,
-    recipient: str | None = None,
+    recipient: Optional[str] = None,
 ) -> bool:
     """将 Markdown 内容作为邮件发送（plain text + HTML 双版本）。
 
@@ -66,8 +67,6 @@ def send_markdown_mail(
 
 def _md_to_html(md_text: str) -> str:
     """将 Markdown 转换为适合邮件展示的内联 HTML。"""
-    import markdown2
-
     html_content = markdown2.markdown(
         md_text,
         extras=[

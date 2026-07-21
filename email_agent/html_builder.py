@@ -160,11 +160,8 @@ def build_html(
     """
     attachments = attachments or []
 
-    # ── 正文处理 ──
-    if body_type == "text/html":
-        # body_content 已完成 CID→文件路径 替换
-        pass
-    else:
+    # ── 正文处理（HTML 类型已完成 CID→文件路径 替换，不需额外处理）──
+    if body_type != "text/html":
         body_content = (
             "<pre style='white-space:pre-wrap;font-family:inherit;"
             "margin:0;'>" + _html.escape(body_content or "(无法提取邮件正文)") + "</pre>"

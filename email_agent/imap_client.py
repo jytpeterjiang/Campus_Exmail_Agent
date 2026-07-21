@@ -40,7 +40,7 @@ def _to_imap_date(iso_date: str) -> str:
     return f"{d}-{_MONTH_ABBRS[int(m)]}-{y}"
 
 
-def fetch_emails(n=None, since=None, before=None):
+def fetch_emails(n=None, since=None, before=None, on_count=None):
     """生成器：连接 IMAP 服务器，逐封 yield 邮件（支持数量限制与日期范围过滤）。
 
     日期过滤在 IMAP 服务器端完成，仅返回匹配的邮件 ID。
@@ -54,6 +54,10 @@ def fetch_emails(n=None, since=None, before=None):
         起始日期（含），``"YYYY-MM-DD"`` 格式。如 ``"2026-07-01"``。
     before : str or None
         截止日期（不含），``"YYYY-MM-DD"`` 格式。如 ``"2026-07-18"``。
+    on_count : callable or None
+        可选回调，在 search 完成后、fetch 正文前调用。
+        签名为 ``on_count(total: int) -> bool``，返回 ``True`` 继续、``False`` 取消。
+        回调执行时 IMAP 连接仍处于打开状态，用于复用连接的二次确认。
 
     Yields
     ------
@@ -95,6 +99,12 @@ def fetch_emails(n=None, since=None, before=None):
             target_ids = all_ids
 
         total_count = len(target_ids)
+
+        # ── 确认回调（复用当前 IMAP 连接，避免二次登录）──
+        if on_count is not None:
+            if not on_count(total_count):
+                return
+
         for i, mid in enumerate(target_ids, start=1):
             resp, msg_data = conn.fetch(mid, "(RFC822)")
             _check(resp, f"获取邮件 {mid} 失败")
@@ -108,62 +118,4 @@ def fetch_emails(n=None, since=None, before=None):
             pass
 
 
-def count_matching_emails(since=None, before=None):
-    """快速统计匹配日期范围的邮件数量（不拉取内容，速度快）。
 
-    Parameters
-    ----------
-    since : str or None
-        起始日期（含），``"YYYY-MM-DD"`` 格式。
-    before : str or None
-        截止日期（不含），``"YYYY-MM-DD"`` 格式。
-
-    Returns
-    -------
-    int
-        匹配的邮件数量。
-
-    Raises
-    ------
-    IMAPError
-        连接或搜索失败时抛出。
-    """
-    criteria = []
-    if since is not None:
-        criteria.append(f'SINCE "{_to_imap_date(since)}"')
-    if before is not None:
-        criteria.append(f'BEFORE "{_to_imap_date(before)}"')
-    if not criteria:
-        criteria.append("ALL")
-
-    conn = imaplib.IMAP4_SSL(IMAP_SERVER, IMAP_PORT)
-    try:
-        conn.login(EMAIL, PASSWORD)
-        resp, data = conn.select("INBOX")
-        _check(resp, "选择邮箱失败")
-        total = int(data[0])
-        if total == 0:
-            return 0
-        resp, msg_ids = conn.search(None, *criteria)
-        _check(resp, "搜索邮件失败")
-        return len(msg_ids[0].split()) if msg_ids[0] else 0
-    finally:
-        try:
-            conn.logout()
-        except Exception:
-            pass
-
-
-def fetch_latest_emails(n: int = 1):
-    """获取收件箱最新 n 封邮件（``fetch_emails`` 的便捷封装）。
-
-    Parameters
-    ----------
-    n : int
-        要获取的邮件数量。
-
-    Returns
-    -------
-    list[tuple[str, email.message.Message]]
-    """
-    return [(mid, msg) for mid, msg, _i, _total in fetch_emails(n=n)]
