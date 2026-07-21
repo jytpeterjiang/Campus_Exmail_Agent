@@ -1,0 +1,18 @@
+# ── IMAP 接收 ──
+imap_server = imap.exmail.qq.com
+imap_port   = 993
+
+# ── SMTP 发送 ──
+smtp_server = smtp.exmail.qq.com
+smtp_port   = 465
+
+# ── 认证 ──
+email = 
+password = 
+
+# ── 日报邮件发送目标（为空则发送给自己） ──
+send_to =
+
+# ── 输出格式 ──
+# "html" | "markdown" | "both"（默认）
+output_format = both
