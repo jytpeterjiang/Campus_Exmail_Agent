@@ -15,7 +15,6 @@ from email_agent.digest.builder import generate_single_day, aggregate_summaries
 from email_agent.local_data import (
     get_summary_path,
     get_aggregate_path,
-    mail_count,
     classify_dates,
 )
 
@@ -77,7 +76,7 @@ def run(date_spec: dict, output_dir: Path) -> tuple:
             print(f"  ✅ 汇总报告已存在: {path}")
             return path.read_text(encoding="utf-8"), path
 
-        # 多日：聚合已有单日日报（AI 通过 --add-dir 读取 output 目录文件）
+        # 多日：聚合已有单日日报（Python 读文件，AI 汇总）
         print(f"\n📋 正在聚合 {len(available)} 天的日报...")
         summary = aggregate_summaries(
             date_spec["range"]["start"],
@@ -161,18 +160,6 @@ def _ensure_daily_summaries(
                 print(f"  ⚠️ {d} 日报生成失败，跳过")
 
     return daily_summaries
-
-
-# ═══════════════════════════════════════════════════════
-#  路径工具
-# ═══════════════════════════════════════════════════════
-
-def _resolve_aggregate_path(date_spec: dict, output_dir: Path) -> Path:
-    """根据 date_spec 推断聚合报告的文件路径。"""
-    start = date_spec["range"]["start"]
-    end = date_spec["range"]["end"]
-    return get_aggregate_path(start, end)
-
 
 # ═══════════════════════════════════════════════════════
 #  保存

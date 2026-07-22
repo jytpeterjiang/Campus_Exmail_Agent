@@ -1,4 +1,7 @@
-"""邮件发送模块 — 将 Markdown 日报转换为 HTML 邮件并通过 SMTP 发送。"""
+"""邮件发送模块 — 纯 SMTP 传输，不处理内容渲染。
+
+内容渲染由 mail_renderer 模块负责。
+"""
 
 import smtplib
 from email.mime.text import MIMEText
@@ -6,18 +9,48 @@ from email.mime.multipart import MIMEMultipart
 from email.utils import formatdate, make_msgid
 from typing import Optional
 
+from email_agent.mail_renderer import render_email_html
+
 
 def send_markdown_mail(
     markdown_body: str,
     subject: str,
     recipient: Optional[str] = None,
 ) -> bool:
-    """将 Markdown 内容作为邮件发送（plain text + HTML 双版本）。
+    """将 Markdown 日报渲染为美观的 HTML 邮件并发送。
+
+    内部委托给 send_html_mail()：
+    1. mail_renderer.render_email_html() 负责 Markdown → HTML 渲染
+    2. send_html_mail() 负责 MIME 构建 + SMTP 传输
 
     Args:
         markdown_body: 日报的 Markdown 文本
         subject: 邮件主题
         recipient: 收件人地址；为 None 时使用 SEND_TO 或 EMAIL（发给自己）
+
+    Returns:
+        是否发送成功
+    """
+    html_body = render_email_html(markdown_body)
+    return send_html_mail(html_body, markdown_body, subject, recipient)
+
+
+def send_html_mail(
+    html_body: str,
+    plain_body: str = "",
+    subject: str = "",
+    recipient: Optional[str] = None,
+) -> bool:
+    """发送 HTML 邮件（同时附带纯文本版本作为兜底）。
+
+    这是底层发送 API，不处理任何内容转换。
+    如需从 Markdown 发送，请使用 send_markdown_mail()。
+
+    Args:
+        html_body: HTML 格式的邮件正文
+        plain_body: 纯文本版本（邮件客户端不支持 HTML 时的兜底展示）
+        subject: 邮件主题
+        recipient: 收件人地址；为 None 时使用 SEND_TO 或 EMAIL
 
     Returns:
         是否发送成功
@@ -41,17 +74,11 @@ def send_markdown_mail(
     msg["Message-ID"] = make_msgid(domain=EMAIL.split("@")[-1])
 
     # 纯文本版本（邮件客户端不支持 HTML 时的兜底）
-    msg.attach(MIMEText(markdown_body, "plain", "utf-8"))
+    if plain_body:
+        msg.attach(MIMEText(plain_body, "plain", "utf-8"))
 
     # HTML 版本（主流邮件客户端优先展示此版本）
-    try:
-        import markdown2
-    except ImportError:
-        print("⚠️ 未安装 markdown2，仅发送纯文本版本")
-        print("   安装: pip install markdown2")
-    else:
-        html_body = _md_to_html(markdown_body)
-        msg.attach(MIMEText(html_body, "html", "utf-8"))
+    msg.attach(MIMEText(html_body, "html", "utf-8"))
 
     # ── SMTP SSL 发送 ──
     try:
@@ -63,28 +90,3 @@ def send_markdown_mail(
     except smtplib.SMTPException as e:
         print(f"❌ SMTP 发送失败: {e}")
         return False
-
-
-def _md_to_html(md_text: str) -> str:
-    """将 Markdown 转换为适合邮件展示的内联 HTML。"""
-    html_content = markdown2.markdown(
-        md_text,
-        extras=[
-            "tables",
-            "fenced-code-blocks",
-            "header-ids",
-            "strike",
-            "task_list",
-        ],
-    )
-
-    return f"""\
-<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"></head>
-<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, \
-sans-serif; max-width: 720px; margin: 0 auto; padding: 20px; line-height: 1.6; \
-color: #333; background: #fff;">
-{html_content}
-</body>
-</html>"""

@@ -7,16 +7,19 @@ smtp_server = smtp.exmail.qq.com
 smtp_port   = 465
 
 # ── 认证 ──
-email = 
-password = 
+email =
+password =
 
 # ── 日报邮件发送目标（为空则发送给自己） ──
 send_to =
 
-# ── AI 模型 ──
-# 默认 deepseek-v4-flash，可按需更换
-model_name = deepseek-v4-flash
+# ── AI 后端配置 ──
+# 支持任意 OpenAI 兼容服务（OpenAI / DeepSeek / Groq / Ollama / 代理网关）
+ai_base_url = https://api.deepseek.com
+ai_api_key = sk-your-key-here
+ai_model = deepseek-v4-flash
 
-# ── 输出格式 ──
-# "html" | "markdown" | "both"（默认）
-output_format = both
+# ── AI 生成参数 ──
+ai_thinking = false           # 深度思考模式（DeepSeek），开启后思考 token 也计费
+ai_temperature = 0.3          # 创意度 0.0~2.0，0=严谨 1=发散，日报推荐 0.3
+ai_max_tokens = 8192          # 输出最大 token 数，内容多时可调大

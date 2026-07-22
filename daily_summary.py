@@ -14,6 +14,12 @@
     python daily_summary.py --this-month         # 本月1日到今天
     python daily_summary.py --last 7             # 最近7天
     python daily_summary.py --range 2026-07-01 2026-07-18  # 指定范围
+
+模式:
+    python daily_summary.py --last-week --send            # 生成 + 发送（已有文件自动跳过AI）
+    python daily_summary.py --last-week --resend          # 仅发送已有文件（不生成）
+    python daily_summary.py --last-week --regen            # Prompt调优：仅重新生成AI日报（不动邮件）
+    python daily_summary.py --last-week --regen --refetch  # 重新生成 + 强制重拉邮件
 """
 
 import argparse
@@ -23,7 +29,6 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from email_agent.ai.cli_client import check_available
 from email_agent.ai.date_parser import expand_dates, date_to_since_before
 from email_agent.cli import main as fetch_emails_main
 from email_agent.digest.coordinator import run as run_digest
@@ -31,10 +36,11 @@ from email_agent.local_data import (
     get_mail_dir,
     get_summary_path,
     get_aggregate_path,
-    mail_count,
-    is_fetch_complete,
+    get_summary_html_path,
+    get_aggregate_html_path,
     mark_fetch_complete,
 )
+from email_agent.mail_renderer import save_rendered_html
 from email_agent.mail_sender import send_markdown_mail
 
 PROJECT_ROOT = Path(__file__).parent.resolve()
@@ -97,6 +103,13 @@ def _resolve_path(date_spec: dict, output_dir: Path) -> Path:
     return get_aggregate_path(date_spec["range"]["start"], date_spec["range"]["end"])
 
 
+def _resolve_html_path(date_spec: dict) -> Path:
+    """根据 date_spec 推断 HTML 预览文件的保存路径。"""
+    if "single" in date_spec:
+        return get_summary_html_path(date_spec["single"])
+    return get_aggregate_html_path(date_spec["range"]["start"], date_spec["range"]["end"])
+
+
 def _get_since_before(date_spec: dict) -> tuple[str, str]:
     """从 date_spec 提取 IMAP 查询所需的 since/before 日期。
 
@@ -113,103 +126,77 @@ def _get_since_before(date_spec: dict) -> tuple[str, str]:
 
 
 
-def _show_cache_and_confirm(date_spec: dict, output_dir: Path) -> bool:
-    """展示本地缓存并请求用户确认清除。
 
-    Returns
-    -------
-    bool
-        True 表示用户确认继续。
+
+def _handle_regen(date_spec: dict, args) -> None:
+    """重新生成模式：仅清除 AI 日报缓存并重新生成（不动邮件归档）。
+
+    配合 --refetch 时，同时清除邮件归档并重新拉取（需要用户确认）。
     """
     date_list = expand_dates(date_spec)
-    cache_items: list[tuple[str, str]] = []  # (描述, 路径)
+    print(f"\n🔄 重新生成模式：清除 {len(date_list)} 天 AI 日报缓存")
 
-    # 邮件归档
+    # ── 清除 AI 日报缓存 ──
     for d in date_list:
-        md_dir = get_mail_dir(d)
-        count = mail_count(d)
-        if count > 0:
-            cache_items.append((f"邮件归档 ({count} 封)", str(md_dir)))
-
-    # 单日日报
-    for d in date_list:
-        sp = get_summary_path(d)
-        if sp.exists():
-            cache_items.append(("单日日报", str(sp)))
-
-    # 汇总报告（仅范围模式）
-    if "range" in date_spec:
-        ap = _resolve_path(date_spec, output_dir)
-        if ap.exists():
-            cache_items.append(("汇总报告", str(ap)))
-
-    if not cache_items:
-        print("📭 本地无现有缓存，将直接重新获取。")
-        return True
-
-    print("\n📦 本地缓存检查:\n")
-    for desc, path in cache_items:
-        print(f"  ✅ {desc}: {path}")
-
-    print(f"\n⚠️ 以上 {len(cache_items)} 个缓存将被清除并重新获取。")
-    try:
-        answer = input("确认继续? [y/N]: ").strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        print("\n已取消。")
-        return False
-
-    if answer not in ("y", "yes"):
-        print("已取消。")
-        return False
-    return True
-
-
-def _clear_caches(date_spec: dict, output_dir: Path, *, skip_mail_dates: set[str] | None = None) -> None:
-    """清除指定 date_spec 范围内的本地缓存。
-
-    Parameters
-    ----------
-    skip_mail_dates : set[str] or None
-        跳过邮件归档清除的日期（如已有完整归档的历史日期）。
-    """
-    skip_mail = skip_mail_dates or set()
-    date_list = expand_dates(date_spec)
-
-    for d in date_list:
-        # 删除单日日报
         sp = get_summary_path(d)
         if sp.exists():
             sp.unlink()
             print(f"  🗑 已删除日报: {sp}")
 
-        # 删除邮件归档目录（跳过已标记为完整的日期）
-        if d not in skip_mail:
+    if "range" in date_spec:
+        ap = _resolve_path(date_spec, OUTPUT_DIR)
+        if ap.exists():
+            ap.unlink()
+            print(f"  🗑 已删除汇总报告: {ap}")
+
+    # ── --refetch: 清除邮件归档并重拉 ──
+    if args.refetch:
+        print("\n⚠️ --refetch 将清除邮件归档并重新拉取，涉及 IMAP 调用。")
+        try:
+            answer = input("确认继续? [y/N]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print("\n已取消。")
+            return
+        if answer not in ("y", "yes"):
+            print("已取消。")
+            return
+
+        for d in date_list:
             md_dir = get_mail_dir(d)
             if md_dir.exists():
                 shutil.rmtree(md_dir)
                 print(f"  🗑 已删除邮件归档: {md_dir}")
 
-    # 删除汇总报告（仅范围模式）
-    if "range" in date_spec:
-        ap = _resolve_path(date_spec, output_dir)
-        if ap.exists():
-            ap.unlink()
-            print(f"  🗑 已删除汇总报告: {ap}")
+        since, before = _get_since_before(date_spec)
+        print(f"\n📥 正在拉取邮件 ({since} ~ {before})...\n")
+        fetch_emails_main(n=None, fmt="markdown", since=since, before=before)
 
-    print()
+        for d in date_list:
+            mark_fetch_complete(d)
+        print(f"✅ 已标记 {len(date_list)} 个日期为完整归档。\n")
+
+    # ── 重新生成日报 ──
+    _handle_normal(date_spec, args)
+
 
 
 # ═══════════════════════════════════════════════════════
-#  输出 & 发送（fresh 和 normal 共享，解决 S2 重复）
+#  输出 & 发送（normal 和 regen 共享）
 # ═══════════════════════════════════════════════════════
 
 def _present_and_send(summary: str, path: Path, date_spec: dict,
-                      do_send: bool, recipient: str | None) -> None:
-    """打印日报内容、文件路径，并根据 do_send 决定是否发送邮件。"""
+                      do_send: bool, recipient: str | None,
+                      save_html: bool = False) -> None:
+    """打印日报内容、文件路径，并根据参数发送/保存 HTML。"""
     print("\n" + "=" * 60)
     print(summary)
     print("=" * 60)
     print(f"\n✨ 日报已保存到: {path}")
+
+    if save_html:
+        html_path = _resolve_html_path(date_spec)
+        save_rendered_html(summary, html_path)
+        print(f"   用浏览器打开即可预览。")
 
     if do_send:
         subject = _make_subject(date_spec)
@@ -229,50 +216,18 @@ def _handle_resend(date_spec: dict, args) -> None:
         sys.exit(1)
     summary_content = path.read_text(encoding="utf-8")
     print(f"📄 已找到报告: {path}")
-    subject = _make_subject(date_spec)
-    recipient = args.send_to or None
-    send_markdown_mail(summary_content, subject, recipient)
 
+    if args.save_html:
+        html_path = _resolve_html_path(date_spec)
+        save_rendered_html(summary_content, html_path)
+        print(f"   用浏览器打开即可预览。")
 
-def _handle_fresh(date_spec: dict, args) -> None:
-    """全新模式：清除缓存 → 智能重拉 → 重新生成 → 展示/发送。
-
-    智能跳过：历史日期若已有 .fetch_complete 标记则不再重拉邮件。
-    """
-    date_list = expand_dates(date_spec)
-
-    # 区分需要重拉的和已有完整归档的
-    need_refetch = [d for d in date_list if not is_fetch_complete(d)]
-    complete_dates = set(d for d in date_list if is_fetch_complete(d))
-
-    if complete_dates:
-        print(f"📦 以下日期已有完整归档，将仅重新生成日报（不重拉邮件）: {', '.join(sorted(complete_dates))}")
-
-    if not need_refetch:
-        # 全部完整：只清日报缓存，不动邮件归档
-        print("✅ 所有日期归档完整，仅清除日报缓存并重新生成。\n")
-        _clear_caches(date_spec, OUTPUT_DIR, skip_mail_dates=complete_dates)
-    else:
-        if not _show_cache_and_confirm(date_spec, OUTPUT_DIR):
-            return
-        _clear_caches(date_spec, OUTPUT_DIR, skip_mail_dates=complete_dates)
-
-        since, before = _get_since_before(date_spec)
-        print(f"📥 正在重新拉取邮件 ({since} ~ {before})...\n")
-        fetch_emails_main(n=None, fmt="markdown", since=since, before=before)
-
-        # 为拉取完成的日期写入标记
-        for d in need_refetch:
-            mark_fetch_complete(d)
-        print(f"✅ 已标记 {len(need_refetch)} 个日期为完整归档。\n")
-
-    summary, path = run_digest(date_spec, OUTPUT_DIR)
-
-    if summary and path:
-        _present_and_send(summary, path, date_spec, args.send, args.send_to or None)
-        print()
-    else:
-        print("\n⚠️ 日报生成未完成，请检查上述错误信息。")
+    if args.send:
+        subject = _make_subject(date_spec)
+        recipient = args.send_to or None
+        send_markdown_mail(summary_content, subject, recipient)
+    elif not args.save_html:
+        print("\n⚠️ 请指定 --send 或 --save-html")
 
 
 def _handle_normal(date_spec: dict, args) -> None:
@@ -280,8 +235,10 @@ def _handle_normal(date_spec: dict, args) -> None:
     summary, path = run_digest(date_spec, OUTPUT_DIR)
 
     if summary and path:
-        _present_and_send(summary, path, date_spec, args.send, args.send_to or None)
-        print(f"   用 Typora / VS Code / 浏览器打开即可阅读。")
+        _present_and_send(summary, path, date_spec, args.send, args.send_to or None,
+                          save_html=args.save_html)
+        if not args.save_html:
+            print(f"   用 Typora / VS Code / 浏览器打开即可阅读。")
         print()
     elif not summary:
         print("\n⚠️ 日报生成未完成，请检查上述错误信息。")
@@ -306,13 +263,15 @@ def main():
   python daily_summary.py --last 7
   python daily_summary.py --range 2026-07-01 2026-07-18
 
-发送模式:
-  python daily_summary.py --last-week --send           # 生成 + 发送（已有文件自动跳过 AI）
-  python daily_summary.py --last-week --resend         # 仅发送已有文件（不生成）
-  python daily_summary.py --last-week --resend --send-to user@example.com
-  python daily_summary.py --last-week --fresh           # 清除缓存后重新拉取 + 生成
-  python daily_summary.py --last-week --fresh --send    # 强制全新拉取 + 生成 + 发送
-  python daily_summary.py --date 2026-07-18 --fresh --send  # 单日也支持
+发送 & 调优:
+  python daily_summary.py --last-week --send            # 生成 + 发送（已有文件自动跳过AI）
+  python daily_summary.py --last-week --save-html       # 生成 + 渲染HTML本地预览（不发送）
+  python daily_summary.py --last-week --send --save-html # 生成 + 发送 + 同时保存HTML
+  python daily_summary.py --last-week --resend          # 仅发送已有文件（不生成）
+  python daily_summary.py --last-week --resend --save-html # 发送已有文件 + 同时渲染HTML
+  python daily_summary.py --last-week --regen            # Prompt调优：仅重新生成AI日报（不动邮件）
+  python daily_summary.py --last-week --regen --refetch  # 重新生成 + 强制重拉邮件
+  python daily_summary.py --last-week --regen --send     # 重新生成 + 发送
 """,
     )
 
@@ -328,21 +287,22 @@ def main():
 
     parser.add_argument("-s", "--send", action="store_true", help="生成日报后通过 SMTP 发送")
     parser.add_argument("-r", "--resend", action="store_true", help="直接发送已保存的报告文件（不重新生成）")
-    parser.add_argument("--fresh", action="store_true", help="强制重新拉取邮件并完全重新生成（清除缓存）")
+    parser.add_argument("--regen", action="store_true", help="仅重新生成 AI 日报缓存（不动邮件归档，用于 Prompt 调优）")
+    parser.add_argument("--refetch", action="store_true", help="配合 --regen 使用，同时清除并重新拉取邮件")
+    parser.add_argument("--save-html", action="store_true", help="渲染为 HTML 保存到本地（不发送也可预览）")
     parser.add_argument("--send-to", type=str, default="", metavar="EMAIL", help="日报接收邮箱")
 
     args = parser.parse_args()
 
     # ── 参数互斥检查 ──
-    if args.resend and args.fresh:
-        parser.error("--resend 与 --fresh 互斥：--resend 仅发送已有文件，无需清除缓存重新生成。")
+    if args.resend and args.regen:
+        parser.error("--resend 与 --regen 互斥：--resend 仅发送已有文件，无需重新生成。")
+
+    if args.refetch and not args.regen:
+        parser.error("--refetch 需要配合 --regen 使用。")
 
     if args.send_to and not (args.send or args.resend):
         parser.error("--send-to 需要配合 --send 或 --resend 使用。")
-
-    # ── 前置检查 CLI（check_available() 失败时已打印诊断信息）──
-    if not check_available():
-        sys.exit(1)
 
     # ── 构建 date_spec ──
     today = datetime.now().date()
@@ -385,8 +345,8 @@ def main():
     # ── 分发到对应 handler ──
     if args.resend:
         _handle_resend(date_spec, args)
-    elif args.fresh:
-        _handle_fresh(date_spec, args)
+    elif args.regen:
+        _handle_regen(date_spec, args)
     else:
         _handle_normal(date_spec, args)
 

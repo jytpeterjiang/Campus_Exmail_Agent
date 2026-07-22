@@ -1,111 +1,65 @@
-"""日报构建器：组装参数，调用 CLI，返回 Markdown 内容。
+"""日报构建器：组装参数，调用 AI，返回 Markdown 内容。
 
 两个核心函数：
 - generate_single_day()：读原始 .md 邮件 → 生成单日日报
 - aggregate_summaries()：读已有日报 → 聚合为周报/月报
+
+设计原则：Python 负责读文件，AI 只负责理解 + 生成。
 """
 
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from email_agent.ai.cli_client import query, CLIClientError
-from email_agent.ai.prompts import build_single_day_prompt, build_aggregate_prompt, SINGLE_DAY_SYSTEM, AGGREGATE_SYSTEM
+from email_agent.ai import query, AIError
+from email_agent.ai import (
+    SYSTEM_PROMPT,
+    AGGREGATE_SYSTEM_PROMPT,
+    build_single_day_prompt,
+    build_aggregate_prompt,
+)
 
 
 # ═══════════════════════════════════════════════════════
 #  输出清理
 # ═══════════════════════════════════════════════════════
 
-def _clean_output(text: str) -> str:
-    """清理 CLI 输出中的非内容噪音。
+def _clean_output(text: str, footer: str) -> Optional[str]:
+    """轻量清理 AI 输出。
 
-    模型在非交互模式下可能输出前缀噪音和尾部闲聊：
-    - 前缀：权限提示、免责声明等
-    - 尾部："请告诉我如何继续"、"是否需要写入" 等交互追问
-
-    策略：
-    1. 跳过非 Markdown 内容开头的前缀
-    2. 找到 footer 标记行后截断尾部
-    3. 兜底：反向扫描尾部闲聊行
+    切换 API 后不再有 agent 噪音，只需：
+    1. 校验以 # 开头（有效日报/汇总）
+    2. 补全 footer（如果 AI 未生成）
     """
-    lines = text.split("\n")
-
-    # ── 第一步：前缀清理 ──
-    # 如果行包含以下元描述关键词，判定为非内容噪音，不视为有效开头
-    meta_kw = ["流程", "操作", "步骤", "授权", "方式", "运行", "脚本", "执行",
-               "不需要", "建议", "注意", "提醒", "请提供"]
-    start = 0
-    for i, line in enumerate(lines):
-        stripped = line.strip()
-        if not stripped:
-            continue
-        if any(kw in stripped for kw in meta_kw):
-            continue
-        # 日报常见的有效开头：标题、引用、表格、加粗、列表、有序列表
-        if (stripped.startswith("#") or stripped.startswith(">")
-                or stripped.startswith("|") or stripped.startswith("*")
-                or (stripped.startswith("- ") and not stripped.startswith("- 请"))):
-            start = i
-            break
-    if start > 0:
-        lines = lines[start:]
-
-    # ── 第二步：尾部 footer 截断 ──
-    footer_idx = None
-    for i, line in enumerate(lines):
-        stripped = line.strip()
-        if stripped.startswith("*本日报由 ") or stripped.startswith("*本报告由 Email Agent"):
-            footer_idx = i
-            break
-
-    if footer_idx is not None:
-        # footer 之后的内容全部丢弃
-        lines = lines[:footer_idx + 1]
-
-    # ── 第三步：兜底 - 反向扫描尾部闲聊行 ──
-    # 去掉末尾纯分隔线
-    while lines and lines[-1].strip() == "---":
-        lines.pop()
-    # 去掉末尾空白行
-    while lines and not lines[-1].strip():
-        lines.pop()
-
-    chat_kw = ["写入", "落盘", "请告诉", "授权", "是否继续", "是否需要", "帮你", "让我",
-               "请提供", "格式模板"]
-    chat_trim = len(lines)
-    for i in range(len(lines) - 1, -1, -1):
-        stripped = lines[i].strip()
-        if not stripped:
-            continue
-        if any(kw in stripped for kw in chat_kw):
-            chat_trim = i
-        else:
-            break
-
-    if chat_trim < len(lines):
-        lines = lines[:chat_trim]
-        while lines and not lines[-1].strip():
-            lines.pop()
-
-    cleaned = "\n".join(lines).strip()
-    # 清洗后仍不以 Markdown 标题开头 → AI 没有生成有效日报（可能是问答/解释文本）
-    if not cleaned or not cleaned.startswith("#"):
+    text = text.strip()
+    if not text.startswith("#"):
         return None
-    return cleaned
+    # 补全 footer（如果 AI 未生成）
+    if "*本日报由 " not in text and "*本报告由 " not in text:
+        text = text.rstrip() + "\n\n---\n" + footer
+    return text
 
 
-def _ensure_footer(text: str, footer: str) -> str:
-    """防御性补全：如果文本末尾没有预期的 footer 行，自动追加。
+# ═══════════════════════════════════════════════════════
+#  文件读取辅助
+# ═══════════════════════════════════════════════════════
 
-    解决 AI 可能因 token 截断或提前结束而遗漏 footer 的问题。
-    """
-    if not text:
-        return text
-    # 检查是否已包含 footer 关键字（避免重复追加）
-    if "*本日报由 " in text or "*本报告由 Email Agent" in text:
-        return text
-    return text.rstrip() + "\n\n---\n" + footer
+def _read_emails(md_dir: Path) -> str:
+    """读取目录下所有 .md 邮件文件，拼接为单个字符串。"""
+    return "\n\n---\n\n".join(
+        fp.read_text(encoding="utf-8")
+        for fp in sorted(md_dir.glob("*.md"))
+    )
+
+
+def _read_summaries(date_list: list[str], output_dir: Path) -> str:
+    """读取多日的 -summary.md 日报文件，拼接为单个字符串。"""
+    parts = []
+    for d in sorted(date_list):
+        sp = output_dir / d / f"{d}-summary.md"
+        if sp.exists():
+            parts.append(sp.read_text(encoding="utf-8"))
+    return "\n\n---\n\n".join(parts)
 
 
 # ═══════════════════════════════════════════════════════
@@ -115,8 +69,7 @@ def _ensure_footer(text: str, footer: str) -> str:
 def generate_single_day(date_str: str, output_dir: Path) -> Optional[str]:
     """生成单日日报（读原始 .md 邮件文件）。
 
-    仅在目标日期尚无 -summary.md 时调用。
-    AI 通过 --add-dir 自主读取邮件文件。
+    Python 负责读文件并内联到 prompt，AI 只负责理解内容。
 
     Parameters
     ----------
@@ -135,22 +88,23 @@ def generate_single_day(date_str: str, output_dir: Path) -> Optional[str]:
         print(f"  ⚠️ {date_str} 的 markdown 目录不存在")
         return None
 
-    prompt = build_single_day_prompt(date_str)
+    # Python 负责读文件
+    emails = _read_emails(md_dir)
+    if not emails.strip():
+        return "当日无邮件"
+
+    # 邮件内容直接传入 prompt
+    prompt = build_single_day_prompt(date_str, emails)
 
     try:
         raw = query(
-            prompt=prompt,
-            system_prompt=SINGLE_DAY_SYSTEM,
-            add_dirs=[md_dir],
-            max_turns=30,
-            timeout=300,
+            system_prompt=SYSTEM_PROMPT,
+            user_prompt=prompt,
+            timeout=120,
         )
-        result = _clean_output(raw)
-        if result:
-            footer = f"*本日报由 Email Agent 基于本地归档生成 · 数据来源：`output/{date_str}/`*"
-            result = _ensure_footer(result, footer)
-        return result
-    except CLIClientError as e:
+        footer = f"*本日报由 Email Agent 基于本地归档生成 · 数据来源：`output/{date_str}/`*"
+        return _clean_output(raw, footer)
+    except AIError as e:
         print(f"  ❌ {date_str} 日报生成失败: {e}")
         return None
 
@@ -164,8 +118,7 @@ def aggregate_summaries(
 ) -> Optional[str]:
     """聚合多日日报为一个综合汇总报告。
 
-    AI 通过 --add-dir 自主读取 output 目录下各日期的 -summary.md 文件，
-    避免将日报内容内联到命令行参数导致超长。
+    Python 读取所有单日日报并内联到 prompt，AI 只负责汇总。
 
     Parameters
     ----------
@@ -176,7 +129,7 @@ def aggregate_summaries(
     date_list : list[str]
         需要汇总的日期列表。
     output_dir : Path
-        项目 output 根目录，通过 --add-dir 暴露给 AI。
+        项目 output 根目录。
 
     Returns
     -------
@@ -186,21 +139,18 @@ def aggregate_summaries(
     if not date_list:
         return None
 
-    prompt = build_aggregate_prompt(start, end, date_list)
+    # Python 负责读取所有日报文件
+    daily_summaries = _read_summaries(date_list, output_dir)
+    prompt = build_aggregate_prompt(start, end, date_list, daily_summaries)
 
     try:
         raw = query(
-            prompt=prompt,
-            system_prompt=AGGREGATE_SYSTEM,
-            add_dirs=[output_dir],
-            max_turns=20,
-            timeout=300,
+            system_prompt=AGGREGATE_SYSTEM_PROMPT,
+            user_prompt=prompt,
+            timeout=120,
         )
-        result = _clean_output(raw)
-        if result:
-            footer = f"*本报告由 Email Agent 基于每日日报汇总生成 · {datetime.now().strftime('%Y-%m-%d %H:%M')}*"
-            result = _ensure_footer(result, footer)
-        return result
-    except CLIClientError as e:
+        footer = f"*本报告由 Email Agent 基于每日日报汇总生成 · {datetime.now().strftime('%Y-%m-%d %H:%M')}*"
+        return _clean_output(raw, footer)
+    except AIError as e:
         print(f"❌ 汇总生成失败: {e}")
         return None

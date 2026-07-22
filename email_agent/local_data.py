@@ -37,6 +37,16 @@ def get_aggregate_path(start: str, end: str) -> Path:
     return OUTPUT_DIR / f"{start}_{end}-summary.md"
 
 
+def get_summary_html_path(date_str: str) -> Path:
+    """单日日报 HTML 预览路径：output/<date>/<date>-summary.html"""
+    return OUTPUT_DIR / date_str / f"{date_str}-summary.html"
+
+
+def get_aggregate_html_path(start: str, end: str) -> Path:
+    """聚合汇总 HTML 预览路径：output/<start>_<end>-summary.html"""
+    return OUTPUT_DIR / f"{start}_{end}-summary.html"
+
+
 def _get_fetch_complete_marker(date_str: str) -> Path:
     """.fetch_complete 标记文件路径。"""
     return OUTPUT_DIR / date_str / ".fetch_complete"

@@ -53,10 +53,19 @@ def __getattr__(name):
         return True
     if name == "OUTPUT_DIR_NAME":
         return "output"
-    if name == "OUTPUT_FORMAT":
-        return _get_cfg().get("output_format", "both")
     if name == "MAX_SAFE_NAME_LENGTH":
         return 120
-    if name == "MODEL_NAME":
-        return _get_cfg().get("model_name", "deepseek-v4-flash")
+    # ── AI 后端配置 ──
+    if name == "AI_BASE_URL":
+        return _get_cfg().get("ai_base_url", "https://api.deepseek.com")
+    if name == "AI_API_KEY":
+        return _get_cfg().get("ai_api_key", "")
+    if name == "AI_MODEL":
+        return _get_cfg().get("ai_model", "deepseek-v4-flash")
+    if name == "AI_THINKING":
+        return _get_cfg().get("ai_thinking", "false").lower() == "true"
+    if name == "AI_TEMPERATURE":
+        return float(_get_cfg().get("ai_temperature", "0.3"))
+    if name == "AI_MAX_TOKENS":
+        return int(_get_cfg().get("ai_max_tokens", "8192"))
     raise AttributeError(f"module 'email_agent.config' has no attribute '{name}'")

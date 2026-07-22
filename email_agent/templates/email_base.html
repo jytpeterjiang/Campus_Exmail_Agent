@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="light">
+<meta name="supported-color-schemes" content="light">
+<title>{{TITLE}}</title>
+<style type="text/css">
+  /* ── Reset ── */
+  body, table, td, p, a, li, blockquote {
+    -webkit-text-size-adjust: 100%;
+    -ms-text-size-adjust: 100%;
+  }
+  body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    background-color: #f4f4f5;
+  }
+  table {
+    border-collapse: collapse;
+    mso-table-lspace: 0pt;
+    mso-table-rspace: 0pt;
+  }
+  img {
+    border: 0;
+    height: auto;
+    line-height: 100%;
+    outline: none;
+    text-decoration: none;
+    -ms-interpolation-mode: bicubic;
+  }
+
+  /* ── Wrapper ── */
+  .email-wrapper {
+    width: 100%;
+    background-color: #f4f4f5;
+    padding: 24px 0;
+  }
+  .email-container {
+    max-width: 680px;
+    margin: 0 auto;
+    background-color: #ffffff;
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
+  }
+
+  /* ── Header ── */
+  .email-header {
+    background-color: #2563eb;
+    padding: 36px 40px;
+    text-align: center;
+  }
+  .email-header-title {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    font-size: 26px;
+    font-weight: 700;
+    color: #ffffff;
+    margin: 0 0 10px 0;
+    line-height: 1.3;
+    letter-spacing: -0.3px;
+  }
+  .email-header-subtitle {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    font-size: 15px;
+    font-weight: 400;
+    color: rgba(255, 255, 255, 0.85);
+    margin: 0;
+    line-height: 1.5;
+  }
+  /* ── Body ── */
+  .email-body {
+    padding: 36px 40px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    font-size: 15px;
+    line-height: 1.7;
+    color: #374151;
+  }
+
+  /* ── 内容排版 ── */
+  .email-body h1 {
+    font-size: 0;  /* 隐藏 — 标题已在 header 中 */
+    margin: 0;
+  }
+  .email-body h2 {
+    font-size: 18px;
+    font-weight: 700;
+    color: #1f2937;
+    margin: 28px 0 14px 0;
+    padding-bottom: 8px;
+    border-bottom: 2px solid #e5e7eb;
+  }
+  .email-body h3 {
+    font-size: 16px;
+    font-weight: 600;
+    color: #374151;
+    margin: 20px 0 10px 0;
+    padding-left: 12px;
+    border-left: 3px solid #3b82f6;
+  }
+  .email-body p {
+    margin: 0 0 12px 0;
+  }
+  .email-body ul, .email-body ol {
+    margin: 0 0 16px 0;
+    padding-left: 22px;
+  }
+  .email-body li {
+    margin-bottom: 6px;
+  }
+  .email-body strong {
+    color: #1f2937;
+  }
+  .email-body a {
+    color: #2563eb;
+    text-decoration: underline;
+  }
+  .email-body code {
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 13px;
+    background-color: #f3f4f6;
+    padding: 2px 6px;
+    border-radius: 4px;
+    color: #be185d;
+  }
+  .email-body pre {
+    background-color: #1f2937;
+    color: #e5e7eb;
+    padding: 16px 20px;
+    border-radius: 8px;
+    overflow-x: auto;
+    font-size: 13px;
+    line-height: 1.5;
+    margin: 0 0 16px 0;
+  }
+  .email-body pre code {
+    background: none;
+    padding: 0;
+    color: inherit;
+    border-radius: 0;
+  }
+  .email-body blockquote {
+    margin: 0 0 16px 0;
+    padding: 12px 18px;
+    border-left: 4px solid #3b82f6;
+    background-color: #eff6ff;
+    color: #1e40af;
+    font-style: italic;
+    border-radius: 0 6px 6px 0;
+  }
+
+  /* ── Table ── */
+  .email-body table {
+    width: 100%;
+    margin: 0 0 20px 0;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .email-body thead th {
+    background-color: #2563eb;
+    color: #ffffff;
+    font-weight: 600;
+    font-size: 13px;
+    text-align: left;
+    padding: 10px 14px;
+    border-bottom: 2px solid #1e40af;
+  }
+  .email-body tbody td {
+    padding: 10px 14px;
+    border-bottom: 1px solid #f3f4f6;
+    font-size: 14px;
+  }
+  .email-body tbody tr:nth-child(even) {
+    background-color: #f9fafb;
+  }
+  .email-body tbody tr:hover {
+    background-color: #eff6ff;
+  }
+
+  /* ── Horizontal Rule ── */
+  .email-body hr {
+    border: none;
+    border-top: 1px solid #e5e7eb;
+    margin: 28px 0;
+  }
+
+  /* ── Footer ── */
+  .email-footer {
+    background-color: #eff6ff;
+    padding: 20px 40px;
+    text-align: center;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    font-size: 12px;
+    color: #6b7280;
+    line-height: 1.6;
+  }
+  .email-footer p {
+    margin: 0;
+  }
+  .email-footer em {
+    font-style: italic;
+    color: #9ca3af;
+  }
+
+  /* ── Responsive ── */
+  @media screen and (max-width: 600px) {
+    .email-wrapper {
+      padding: 8px 0;
+    }
+    .email-container {
+      border-radius: 0;
+      box-shadow: none;
+    }
+    .email-header {
+      padding: 24px 20px;
+    }
+    .email-header-title {
+      font-size: 20px;
+    }
+    .email-header-subtitle {
+      font-size: 13px;
+    }
+    .email-body {
+      padding: 24px 20px;
+      font-size: 14px;
+    }
+    .email-body h2 {
+      font-size: 16px;
+    }
+    .email-body h3 {
+      font-size: 14px;
+    }
+    .email-footer {
+      padding: 16px 20px;
+    }
+  }
+</style>
+</head>
+<body>
+  <!--[if mso]><noscript><xml><o:OfficeDocumentSettings><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml></noscript><![endif]-->
+
+  <!-- ── Wrapper Table ── -->
+  <table role="presentation" class="email-wrapper" width="100%" cellpadding="0" cellspacing="0" border="0">
+    <tr>
+      <td align="center">
+
+        <!-- ── Container Table ── -->
+        <table role="presentation" class="email-container" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:680px;">
+          <!-- Header -->
+          <tr>
+            <td class="email-header">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td align="center">
+                    <h1 class="email-header-title">{{TITLE}}</h1>
+                  </td>
+                </tr>
+                <tr>
+                  <td align="center">
+                    <p class="email-header-subtitle">{{SUBTITLE}}</p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Body -->
+          <tr>
+            <td class="email-body">
+              {{CONTENT}}
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td class="email-footer">
+              {{FOOTER}}
+            </td>
+          </tr>
+        </table>
+
+      </td>
+    </tr>
+  </table>
+
+</body>
+</html>

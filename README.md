@@ -1,19 +1,21 @@
 # Email Agent — AI 驱动的邮件日报助手
 
-基于 IMAP 自动拉取邮件归档，结合 CodeBuddy AI 生成智能日报/周报/月报，支持邮件回发。
+基于 IMAP 自动拉取邮件归档，结合 OpenAI 兼容 API（DeepSeek / Groq / Ollama 等）生成智能日报/周报/月报，支持 HTML 邮件回发与本地预览。
 
 ```mermaid
 flowchart LR
-    A["📧 腾讯企业邮箱<br/>IMAP 服务器"] -->|python fetch_email.py| B["📁 本地归档<br/>output/日期/html + md"]
-    B -->|python daily_summary.py| C["🤖 CodeBuddy AI<br/>生成日报/周报/月报"]
-    C --> D["📄 Markdown 日报<br/>output/日期/日期-summary.md"]
-    D -->|--send| E["📨 SMTP 邮件回发<br/>Markdown + HTML 双版本"]
+    A["📧 企业邮箱<br/>IMAP 服务器"] -->|fetch_email.py| B["📁 本地归档<br/>HTML + Markdown + 附件"]
+    B -->|daily_summary.py| C["🤖 AI 大语言模型<br/>生成日报/周报/月报"]
+    C --> D["📄 Markdown 日报"]
+    D -->|"模板渲染 + CSS 内联"| E["📨 HTML 邮件回发"]
+    D -->|--save-html| F["💻 本地浏览器预览"]
 
     style A fill:#e3f2fd,stroke:#1565c0,color:#0d47a1
     style B fill:#fff3e0,stroke:#e65100,color:#e65100
     style C fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20
     style D fill:#f3e5f5,stroke:#7b1fa2,color:#4a148c
     style E fill:#e8eaf6,stroke:#283593,color:#1a237e
+    style F fill:#fce4ec,stroke:#c62828,color:#b71c1c
 ```
 
 ## 项目背景
@@ -28,13 +30,49 @@ flowchart LR
 
 > 本项目首先在 **BNBU（北师香港浸会大学）** 的学生企业邮箱环境下完成测试验证，并在设计上尽可能兼容所有支持 IMAP 协议的邮箱服务商（腾讯企业邮、网易企业邮、阿里企业邮、Google Workspace、Microsoft 365 等）。
 
+## 项目架构
+
+项目采用模块化设计，核心逻辑位于 `email_agent/` 包中，顶层脚本仅负责参数解析与流程编排：
+
+```
+email_agent/
+├── ai/                        # AI 调用层
+│   ├── client.py              # OpenAI 兼容客户端（基于 openai 库）
+│   ├── prompts.py             # Prompt 模板集中管理
+│   └── date_parser.py         # 日期范围展开工具
+├── digest/                    # 日报业务层
+│   ├── coordinator.py         # 编排多日汇总（单日 → 聚合两级生成）
+│   └── builder.py             # 单日日报构建（读邮件 → 调 AI）
+├── templates/
+│   └── email_base.html        # 响应式 HTML 邮件模板
+├── cli.py                     # 邮件拉取编排（IMAP → 解析 → 归档）
+├── config.py                  # 惰性配置加载（支持 OpenAI 兼容参数）
+├── imap_client.py             # IMAP 客户端封装
+├── local_data.py              # 本地数据路径/状态查询
+├── mail_renderer.py           # Markdown → HTML 邮件渲染（模板 + premailer CSS 内联）
+├── mail_sender.py             # SMTP 发送（Markdown + HTML 双版本）
+├── parser.py                  # 邮件解析（MIME / CID 图片）
+├── html_builder.py            # HTML 归档构建
+├── md_builder.py              # Markdown 归档构建
+└── utils.py                   # 通用工具函数
+```
+
+| 模块              | 职责                                                  |
+| ----------------- | ----------------------------------------------------- |
+| `ai/`           | 封装 AI 调用细节，管理 Prompt 模板，统一错误处理      |
+| `digest/`       | 日报生成业务编排：检查本地归档 → 调用 AI → 写入文件 |
+| `mail_renderer` | Markdown → 精美 HTML 邮件，含响应式模板与 CSS 内联   |
+| `local_data`    | 所有`output/` 路径公式与状态查询的唯一来源          |
+| `cli.py`        | 拉取流程编排，自动跳过自己发出的邮件避免反馈循环      |
+
 ## 目录
 
 - [项目背景](#项目背景)
+- [项目架构](#项目架构)
 - [环境准备](#环境准备)
   - [1. Python 环境安装](#1-python-环境安装)
   - [2. 企业邮箱 IMAP 配置（获取客户端专用密码）](#2-企业邮箱-imap-配置获取客户端专用密码)
-  - [3. 安装 CodeBuddy CLI 并配置 API Key](#3-安装-codebuddy-cli-并配置-api-key)
+  - [3. 配置 AI API Key](#3-配置-ai-api-key)
 - [快速上手](#快速上手)
   - [第 1 步：配置项目](#第-1-步配置项目)
   - [第 2 步：拉取邮件到本地](#第-2-步拉取邮件到本地)
@@ -52,7 +90,7 @@ flowchart LR
 
 ### 1. Python 环境安装
 
-本工具需要 **Python 3.8 或更高版本**。项目仅使用 Python 标准库，无需安装额外的 pip 包。
+本工具需要 **Python 3.8 或更高版本**。
 
 **检查是否已安装：**
 
@@ -85,14 +123,21 @@ sudo apt update
 sudo apt install python3
 ```
 
-**克隆项目：**
+**克隆项目并安装依赖：**
 
 ```bash
 git clone <repository-url>
 cd Email_Agent
+pip install -r requirements.txt
 ```
 
-> 本项目核心依赖为标准库（`imaplib`、`email`、`pathlib`、`subprocess` 等）。邮件回发功能需要 `markdown2` 将日报转为 HTML 格式，请执行 `pip install -r requirements.txt`。
+| 依赖          | 用途                                                |
+| ------------- | --------------------------------------------------- |
+| `openai`    | 调用 OpenAI 兼容 API（DeepSeek / Groq / Ollama 等） |
+| `markdown2` | Markdown → HTML 转换（日报邮件回发）               |
+| `premailer` | CSS 内联到 HTML 元素（邮件客户端兼容性关键步骤）    |
+
+> Windows 用户还需将 `html-to-markdown/html2markdown.exe` 保持在项目目录中（用于将 HTML 邮件转为 Markdown 归档）。macOS / Linux 用户可安装 [`html2text`](https://pypi.org/project/html2text/) 并修改 `email_agent/md_builder.py` 中的调用方式。
 
 ---
 
@@ -116,13 +161,15 @@ cd Email_Agent
 
 #### 第三步：开启 IMAP/SMTP 服务
 
-1. 点击右上角 **设置** → **收发信设置**
+1. 点击右上角 **设置** → **客户端设置**
 2. 找到 **开启 IMAP/SMTP 服务**，点击勾选
 3. 点击 **保存**
 
+![开启IMAP/SMTP服务](image/README/IMAP_SMTP.png)
+
 #### 第四步：开启安全登录
 
-1. 进入 **设置** → **邮箱绑定** → **安全登录**
+1. 进入 **设置** → **微信绑定** → **安全登录**
 2. 点击 **开启安全登录**，按提示完成验证
 
 #### 第五步：生成客户端专用密码 ⚠️ 最关键
@@ -133,130 +180,61 @@ cd Email_Agent
 4. 点击确定，页面会显示一个 **16 位字符的密码**
 5. ⛔ **立即复制保存！关闭弹窗后密码无法找回，只能重新生成**
 
+![获取登录密码](image/README/Exmail_Client_Key.png)
+
 #### 服务器信息（后续配置需要）
 
-| 项目 | 值 |
-|------|-----|
-| IMAP 服务器 | `imap.exmail.qq.com` |
-| IMAP 端口 | `993` |
-| IMAP 加密 | SSL |
-| SMTP 服务器 | `smtp.exmail.qq.com` |
-| SMTP 端口 | `465` |
-| SMTP 加密 | SSL |
-| 密码 | **客户端专用密码**（16 位，非登录密码！） |
+| 项目        | 值                                              |
+| ----------- | ----------------------------------------------- |
+| IMAP 服务器 | `imap.exmail.qq.com`                          |
+| IMAP 端口   | `993`                                         |
+| IMAP 加密   | SSL                                             |
+| SMTP 服务器 | `smtp.exmail.qq.com`                          |
+| SMTP 端口   | `465`                                         |
+| SMTP 加密   | SSL                                             |
+| 密码        | **客户端专用密码**（16 位，非登录密码！） |
 
 ---
 
-### 3. 安装 CodeBuddy CLI 并配置 API Key
+### 3. 配置 AI API Key
 
-`daily_summary.py` 需要 CodeBuddy CLI 来调用 AI 生成日报。选用以下任一方式安装：
+`daily_summary.py` 通过 OpenAI 兼容 API 调用大语言模型生成日报，支持 DeepSeek、OpenAI、Groq、Ollama 等多种服务。
 
-#### 方式一：npm 全局安装（推荐，跨平台）
+#### 获取 API Key（以 DeepSeek 为例，推荐国内用户使用）
 
-**前置条件：** Node.js ≥ 18.20
-
-```bash
-node --version   # 确认版本
-npm install -g @tencent-ai/codebuddy-code
-```
-
-若未安装 Node.js，访问 [nodejs.org](https://nodejs.org/) 下载 LTS 版本。
-
-#### 方式二：原生二进制安装（无需 Node.js）
-
-**Windows（PowerShell 管理员权限）：**
-
-```powershell
-irm https://www.codebuddy.cn/cli/install.ps1 | iex
-```
-
-安装路径为 `%USERPROFILE%\AppData\Local\codebuddy\bin`，安装程序会自动添加到 PATH。
-
-**macOS / Linux：**
-
-```bash
-curl -fsSL https://www.codebuddy.cn/cli/install.sh | bash
-```
-
-#### 方式三：Homebrew（仅 macOS / Linux）
-
-```bash
-brew tap Tencent-CodeBuddy/tap
-brew install codebuddy-code
-```
-
-#### 验证安装
-
-```bash
-codebuddy --version
-```
-
-如果提示命令找不到，请关闭并重新打开终端，或检查 PATH 配置。
-
----
-
-#### 配置 API Key
-
-**获取 API Key：**
-
-1. 访问 [www.codebuddy.cn](https://www.codebuddy.cn) 并登录
-2. 进入个人设置或 API 密钥管理页面
+1. 访问 [platform.deepseek.com](https://platform.deepseek.com) 并注册/登录
+2. 进入 **API Keys** 页面
 3. 创建新的 API Key 并复制
 
-**配置环境变量：**
+其他服务获取方式：
 
-Windows PowerShell：
+| 服务商             | 获取地址                                              | 特点                 |
+| ------------------ | ----------------------------------------------------- | -------------------- |
+| **DeepSeek** | [platform.deepseek.com](https://platform.deepseek.com) | 国内直连，性价比高   |
+| **OpenAI**   | [platform.openai.com](https://platform.openai.com)     | 最强模型，需代理     |
+| **Groq**     | [console.groq.com](https://console.groq.com)           | 极快推理，有免费额度 |
+| **Ollama**   | [ollama.com](https://ollama.com)                       | 本地运行，完全免费   |
 
-```powershell
-# 临时生效（当前终端）
-$env:CODEBUDDY_API_KEY="你的API-Key"
-$env:CODEBUDDY_INTERNET_ENVIRONMENT="internal"
+#### 配置 API 信息
 
-# 永久生效（所有新终端）
-[Environment]::SetEnvironmentVariable("CODEBUDDY_API_KEY", "你的API-Key", "User")
-[Environment]::SetEnvironmentVariable("CODEBUDDY_INTERNET_ENVIRONMENT", "internal", "User")
+编辑项目根目录下的 `config.txt`，填入 AI 后端信息：
+
+```ini
+# ── AI 后端配置 ──
+ai_base_url = https://api.deepseek.com
+ai_api_key = sk-your-api-key-here
+ai_model = deepseek-v4-flash
+
+# ── AI 生成参数（可选）──
+ai_thinking = false           # 深度思考模式（DeepSeek），开启后思考 token 也计费
+ai_temperature = 0.3          # 创意度 0.0~2.0，0=严谨 1=发散，日报推荐 0.3
+ai_max_tokens = 8192          # 输出最大 token 数，内容多时可调大
+
+# 其他模型示例：
+# OpenAI 官方:     base_url=https://api.openai.com/v1  model=gpt-4o-mini
+# Groq 极速:       base_url=https://api.groq.com/openai/v1  model=llama-3.3-70b-versatile
+# Ollama 本地免费: base_url=http://localhost:11434/v1  model=qwen3:14b  api_key=ollama
 ```
-
-macOS / Linux（bash / zsh）：
-
-```bash
-export CODEBUDDY_API_KEY="你的API-Key"
-export CODEBUDDY_INTERNET_ENVIRONMENT="internal"
-
-# 写入配置文件永久生效
-echo 'export CODEBUDDY_API_KEY="你的API-Key"' >> ~/.zshrc
-echo 'export CODEBUDDY_INTERNET_ENVIRONMENT="internal"' >> ~/.zshrc
-source ~/.zshrc
-```
-
-> **说明：** `CODEBUDDY_INTERNET_ENVIRONMENT=internal` 用于中国版（内网环境）。如果你使用的是国际版，可设置 `=external` 或不设置此变量。
-
-#### 验证 API Key 配置
-
-```bash
-codebuddy -p "你好，请回复'配置成功'"
-```
-
-如果返回 "配置成功"，说明一切就绪。
-
-#### 配置 AI 模型（节省积分）
-
-CodeBuddy CLI 默认使用模型可能消耗较多积分。本项目的 `daily_summary.py` 已内置指定 `deepseek-v4-flash` 模型来节省消耗。你也可以在 CodeBuddy 全局设置中固化模型选择，让手动使用 CLI 时同样受益。
-
-编辑 CodeBuddy 的 settings.json 文件：
-
-- **Windows:** `C:\Users\<你的用户名>\.codebuddy\settings.json`
-- **macOS / Linux:** `~/.codebuddy/settings.json`
-
-在 JSON 文件中添加 `model` 字段：
-
-```json
-{
-  "model": "deepseek-v4-flash"
-}
-```
-
-如果文件已存在其他配置项，只需追加 `"model": "deepseek-v4-flash"` 即可。保存后新终端会话生效。
 
 ---
 
@@ -293,9 +271,15 @@ password = XXXXXXXXXXXXXXXX         # ← 客户端专用密码（16位）
 # ── 日报邮件发送目标（为空则发送给自己） ──
 send_to =                            # ← 可选，指定日报接收邮箱
 
-# ── 输出格式 ──
-# "html" | "markdown" | "both"（默认）
-output_format = both
+# ── AI 后端配置 ──
+ai_base_url = https://api.deepseek.com
+ai_api_key = sk-your-key-here       # ← 填入你的 API Key
+ai_model = deepseek-v4-flash
+
+# ── AI 生成参数（可选）──
+ai_thinking = false                  # 深度思考模式
+ai_temperature = 0.3                 # 创意度 0.0~2.0
+ai_max_tokens = 8192                 # 输出最大 token 数
 ```
 
 ### 第 2 步：拉取邮件到本地
@@ -336,6 +320,7 @@ python daily_summary.py --date 2026-07-18
 ```
 
 日报内容包含：
+
 - 📊 收件统计表（总数 / 有效 / 撤回 / 附件数 / 时间段）
 - 📧 逐封邮件摘要、关键信息与行动项
 - 🎯 今日要点总结
@@ -360,13 +345,14 @@ python daily_summary.py --range 2026-07-01 2026-07-18
 ```
 
 多日汇总额外包含：
+
 - 📅 每日重点摘要表
 - ✅ 跨天去重合并的待办清单
 - 📈 趋势概览（邮件量走势 / 高频主题 / 最活跃发件人）
 
 ### 第 4 步：邮件回发日报（可选）
 
-生成日报后，可以通过 SMTP 将日报发送到指定邮箱，支持 Markdown + HTML 双版本：
+生成日报后，可以通过 SMTP 将日报发送到指定邮箱，支持精美的 HTML 邮件格式：
 
 ```bash
 # 生成并发送日报
@@ -378,11 +364,17 @@ python daily_summary.py --yesterday --send --send-to friend@example.com
 # 仅发送已有日报（不重新生成）
 python daily_summary.py --last-week --resend
 
-# 强制刷新 + 生成 + 发送（清除缓存→重新拉取→AI 生成→发送）
-python daily_summary.py --yesterday --fresh --send
+# 重新生成日报 + 发送（仅清 AI 缓存，不动邮件归档）
+python daily_summary.py --yesterday --regen --send
+
+# 强制重拉邮件 + 重新生成 + 发送
+python daily_summary.py --yesterday --regen --refetch --send
+
+# 渲染 HTML 本地预览（不发送，可在浏览器中直接查看）
+python daily_summary.py --yesterday --save-html
 ```
 
-> **注意：** 邮件回发功能需要在 `config.txt` 中配置 SMTP 服务器信息和客户端专用密码。不指定 `--send-to` 时，默认发给 `config.txt` 中的 `send_to` 配置项，若未配置则发给自己。
+> **注意：** 邮件回发功能需要在 `config.txt` 中配置 SMTP 服务器信息和客户端专用密码。发送的邮件为 HTML 格式，基于响应式模板渲染，在手机和桌面客户端均可正常显示。不指定 `--send-to` 时，默认发给 `config.txt` 中的 `send_to` 配置项，若未配置则发给自己。
 
 ---
 
@@ -390,22 +382,22 @@ python daily_summary.py --yesterday --fresh --send
 
 ### `fetch_email.py` — 邮件拉取归档
 
-| 参数 | 说明 | 示例 |
-|------|------|------|
-| `--count N`, `-n N` | 最多拉取 N 封最新邮件，默认 5 | `--count 10` |
-| `--all`, `-a` | 获取日期范围内全部邮件（与 --count 互斥） | `--all` |
-| `--format`, `-f` | 输出格式：`html` / `markdown` / `both`，默认 `both` | `--format markdown` |
-| `--on` | 日期过滤（详见下表） | 见下方 |
+| 参数                    | 说明                                                        | 示例                  |
+| ----------------------- | ----------------------------------------------------------- | --------------------- |
+| `--count N`, `-n N` | 最多拉取 N 封最新邮件，默认 5                               | `--count 10`        |
+| `--all`, `-a`       | 获取日期范围内全部邮件（与 --count 互斥）                   | `--all`             |
+| `--format`, `-f`    | 输出格式：`html` / `markdown` / `both`，默认 `both` | `--format markdown` |
+| `--on`                | 日期过滤（详见下表）                                        | 见下方                |
 
 **`--on` 参数用法：**
 
-| 语法 | 含义 |
-|------|------|
-| `--on now` | 今天（默认值） |
-| `--on 2026-07-18` | 仅 7 月 18 日当天 |
-| `--on 2026-07-01 2026-07-18` | 7 月 1 日 至 7 月 18 日 |
-| `--on 2026-07-01 ..` | 7 月 1 日之后（无结束日期） |
-| `--on .. 2026-07-18` | 7 月 18 日之前（无起始日期） |
+| 语法                           | 含义                         |
+| ------------------------------ | ---------------------------- |
+| `--on now`                   | 今天（默认值）               |
+| `--on 2026-07-18`            | 仅 7 月 18 日当天            |
+| `--on 2026-07-01 2026-07-18` | 7 月 1 日 至 7 月 18 日      |
+| `--on 2026-07-01 ..`         | 7 月 1 日之后（无结束日期）  |
+| `--on .. 2026-07-18`         | 7 月 18 日之前（无起始日期） |
 
 ---
 
@@ -413,25 +405,27 @@ python daily_summary.py --yesterday --fresh --send
 
 **日期参数**（互斥，每次只能使用一个）：
 
-| 参数 | 说明 | 示例 |
-|------|------|------|
-| `--today` | 今天的邮件日报 | |
-| `--yesterday` | 昨天的邮件日报 | |
-| `--date YYYY-MM-DD` | 指定日期的邮件日报 | `--date 2026-07-18` |
-| `--this-week` | 本周一到今天的汇总 | |
-| `--last-week` | 上周一到上周日的汇总 | |
-| `--this-month` | 本月 1 日到今天的汇总 | |
-| `--last N` | 最近 N 天的汇总 | `--last 7` |
-| `--range START END` | 指定日期范围的汇总 | `--range 2026-07-01 2026-07-18` |
+| 参数                  | 说明                  | 示例                              |
+| --------------------- | --------------------- | --------------------------------- |
+| `--today`           | 今天的邮件日报        |                                   |
+| `--yesterday`       | 昨天的邮件日报        |                                   |
+| `--date YYYY-MM-DD` | 指定日期的邮件日报    | `--date 2026-07-18`             |
+| `--this-week`       | 本周一到今天的汇总    |                                   |
+| `--last-week`       | 上周一到上周日的汇总  |                                   |
+| `--this-month`      | 本月 1 日到今天的汇总 |                                   |
+| `--last N`          | 最近 N 天的汇总       | `--last 7`                      |
+| `--range START END` | 指定日期范围的汇总    | `--range 2026-07-01 2026-07-18` |
 
 **发送与刷新参数**（可选，配合日期参数使用）：
 
-| 参数 | 说明 | 示例 |
-|------|------|------|
-| `--send` | 生成后通过 SMTP 发送日报（已有则跳过 AI 直接发送） | `--yesterday --send` |
-| `--resend` | 仅发送已有报告，不重新生成（文件必须存在） | `--last-week --resend` |
-| `--fresh` | 强制清除缓存→重新拉取邮件→重新 AI 生成（需确认） | `--yesterday --fresh` |
-| `--send-to EMAIL` | 指定日报接收邮箱（不指定则用 config 默认值） | `--send-to friend@company.com` |
+| 参数                | 说明                                                                        | 示例                              |
+| ------------------- | --------------------------------------------------------------------------- | --------------------------------- |
+| `--send`          | 生成后通过 SMTP 发送日报（已有则跳过 AI 直接发送）                          | `--yesterday --send`            |
+| `--resend`        | 仅发送已有报告，不重新生成（文件必须存在）                                  | `--last-week --resend`          |
+| `--regen`         | 仅清除 AI 日报缓存并重新生成（不动邮件归档，用于 Prompt 调优）              | `--yesterday --regen`           |
+| `--refetch`       | 配合`--regen` 使用，同时清除并重新拉取邮件归档                            | `--yesterday --regen --refetch` |
+| `--save-html`     | 渲染日报为 HTML 保存到本地（可在浏览器中预览，也可配合`--send` 同时保存） | `--yesterday --save-html`       |
+| `--send-to EMAIL` | 指定日报接收邮箱（不指定则用 config 默认值）                                | `--send-to friend@company.com`  |
 
 **组合示例：**
 
@@ -445,11 +439,20 @@ python daily_summary.py --last-week --send --send-to boss@company.com
 # 快速补发：已有报告直接发送
 python daily_summary.py --last-week --resend
 
-# 强制全新：清除缓存、重新拉取、重新生成（不发送）
-python daily_summary.py --yesterday --fresh
+# 重新生成日报（仅清 AI 缓存，不动邮件）：Prompt 调优后重试
+python daily_summary.py --yesterday --regen
 
-# 一键全家桶：强制刷新 + 生成 + 发送
-python daily_summary.py --yesterday --fresh --send
+# 强制全新：重拉邮件 + 重新生成（不发送）
+python daily_summary.py --yesterday --regen --refetch
+
+# 一键全家桶：重拉邮件 + 重新生成 + 发送
+python daily_summary.py --yesterday --regen --refetch --send
+
+# 生成日报并保存 HTML 预览
+python daily_summary.py --yesterday --save-html
+
+# 生成 + 发送 + 同时保存 HTML 文件
+python daily_summary.py --yesterday --send --save-html
 ```
 
 ---
@@ -461,6 +464,7 @@ python daily_summary.py --yesterday --fresh --send
 ```
 output/
 ├── 2026-07-18/
+│   ├── .fetch_complete                            ← 全量拉取完成标记
 │   ├── html/
 │   │   └── 会议通知_2026_07_18_14_30_00.html      ← HTML 归档
 │   ├── markdown/
@@ -469,20 +473,24 @@ output/
 │   │   └── 会议通知_2026_07_18_14_30_00/
 │   │       ├── inline_0001.png                     ← 邮件内嵌图片（自动落地）
 │   │       └── 季度报告.pdf                         ← 邮件附件
-│   └── 2026-07-18-summary.md                       ← AI 生成的日报
+│   ├── 2026-07-18-summary.md                       ← AI 生成的日报
+│   └── 2026-07-18-summary.html                     ← HTML 预览（--save-html）
 ├── 2026-07-01/
 │   └── ...
-└── 2026-07-01_2026-07-18-summary.md                ← 多日汇总报告
+├── 2026-07-01_2026-07-18-summary.md                ← 多日汇总报告
+└── 2026-07-01_2026-07-18-summary.html              ← 多日汇总 HTML 预览
 ```
 
 **目录说明：**
 
-| 目录/文件 | 内容 |
-|-----------|------|
-| `html/` | 完整 HTML 邮件归档，可在浏览器直接打开 |
-| `markdown/` | Markdown 格式邮件归档（供 AI 日报读取） |
-| `attachments/` | 附件和内嵌图片（CID 图片自动落地） |
-| `YYYY-MM-DD-summary.md` | CodeBuddy AI 生成的单日/多日日报 |
+| 目录/文件                   | 内容                                                 |
+| --------------------------- | ---------------------------------------------------- |
+| `html/`                   | 完整 HTML 邮件归档，可在浏览器直接打开               |
+| `markdown/`               | Markdown 格式邮件归档（供 AI 日报读取）              |
+| `attachments/`            | 附件和内嵌图片（CID 图片自动落地）                   |
+| `YYYY-MM-DD-summary.md`   | AI 生成的单日日报                                    |
+| `YYYY-MM-DD-summary.html` | 单日日报的 HTML 渲染版本（使用`--save-html` 生成） |
+| `.fetch_complete`         | 标记文件，表示该日期邮件已全量拉取（非部分拉取）     |
 
 ---
 
@@ -495,23 +503,26 @@ output/
 - 确认账号开启了安全登录
 - 如果仍失败，重新生成一个新的客户端专用密码再试
 
-### Q2: 运行 `daily_summary.py` 提示 `codebuddy` 命令找不到？
+### Q2: 运行 `daily_summary.py` 提示 AI API 调用失败？
 
-- 确认已安装 CodeBuddy CLI，运行 `codebuddy --version` 验证
-- Windows 用户：检查 `%USERPROFILE%\AppData\Local\codebuddy\bin` 是否在系统 PATH 中
-- 安装后需要**重新打开终端**让 PATH 生效
-- 使用 `where codebuddy`（Windows）或 `which codebuddy`（macOS/Linux）定位安装位置
+- 确认 `config.txt` 中 `ai_api_key` 已正确填写
+- 确认 `ai_base_url` 地址可访问（如 DeepSeek 的 `https://api.deepseek.com`）
+- 检查网络连接是否正常，部分海外服务可能需要代理
+- 确认账户有足够余额/额度
 
-### Q3: CodeBuddy CLI 调用超时？
+### Q3: AI API 调用超时？
 
-- 日报生成涉及 AI 读取多封邮件，默认超时 5 分钟（300 秒）
+- 日报生成涉及 AI 处理多封邮件，默认超时 120 秒
 - 检查网络连接是否正常
 - 尝试先用少量邮件测试（如 `python fetch_email.py --count 3` 后再生成日报）
+- 可尝试切换更快的模型（如 Groq 的 `llama-3.3-70b-versatile`）
 
-### Q4: 日报生成提示 `未检测到 CodeBuddy CLI`？
+### Q4: 日报生成提示 `AIError`？
 
-- 确认 API Key 已正确配置：运行 `$env:CODEBUDDY_API_KEY`（Windows）或 `echo $CODEBUDDY_API_KEY`（macOS/Linux）检查
-- 运行 `codebuddy -p "test"` 手动测试是否正常返回
+- 确认 `config.txt` 中 AI 配置项（`ai_base_url`、`ai_api_key`、`ai_model`）已正确填写
+- `ai_base_url` 格式为 API 根地址，如 `https://api.deepseek.com`（DeepSeek）或 `https://api.openai.com/v1`（OpenAI）
+- 若使用 Ollama 本地模型，确认 Ollama 服务已启动：`ollama serve`，`ai_base_url` 设为 `http://localhost:11434/v1`
+- 确认模型名称正确（DeepSeek 为 `deepseek-v4-flash`，OpenAI 为 `gpt-4o-mini` 等）
 
 ### Q5: 某天邮件归档缺失（日报提示"以下日期缺少本地邮件归档"）？
 
@@ -533,17 +544,31 @@ output/
 
 日报缓存机制：已生成的 `-summary.md` 会被识别并跳过，避免重复调用 AI。
 
-**方式一：使用 `--fresh` 一键刷新（推荐）**
+**方式一：使用 `--regen` 重新生成（推荐）**
 
 ```bash
-# 自动清除缓存 → 重新拉取邮件 → 重新 AI 生成 → 保存
-python daily_summary.py --date 2026-07-18 --fresh
+# 仅清除 AI 缓存并重新生成（不动邮件归档，适合 Prompt 调优后重试）
+python daily_summary.py --date 2026-07-18 --regen
 
-# 刷新并发送
-python daily_summary.py --yesterday --fresh --send
+# 重新生成并发送
+python daily_summary.py --yesterday --regen --send
 ```
 
-**方式二：手动删除缓存**
+**方式二：使用 `--regen --refetch` 完全重建**
+
+当邮件归档本身也需要更新时（如第一次只拉取了部分邮件），加上 `--refetch`：
+
+```bash
+# 清除邮件归档 + AI 缓存 → 重新拉取 → 重新生成
+python daily_summary.py --yesterday --regen --refetch
+
+# 完全重建并发送
+python daily_summary.py --yesterday --regen --refetch --send
+```
+
+`--refetch` 需要用户确认 `[y/N]`，避免意外清除邮件归档。
+
+**方式三：手动删除缓存**
 
 直接删除对应的 `-summary.md` 文件，下次运行生成命令时会自动重新生成：
 
@@ -554,8 +579,7 @@ rm output/2026-07-18/2026-07-18-summary.md
 ### Q8: Windows 终端显示中文乱码？
 
 - 在 PowerShell 中设置编码：`chcp 65001`
-- 或设置终端默认编码为 UTF-8（Windows 10 1903+ 支持）：  
-  设置 → 时间和语言 → 语言 → 管理语言设置 → 更改系统区域设置 → 勾选 "Beta: 使用 Unicode UTF-8"
+- 或设置终端默认编码为 UTF-8（Windows 10 1903+ 支持）：设置 → 时间和语言 → 语言 → 管理语言设置 → 更改系统区域设置 → 勾选 "Beta: 使用 Unicode UTF-8"
 - 日文/韩文等非中英文邮件会被 AI 自动识别并翻译为中文摘要
 
 ### Q9: `--all` 拉取全部邮件时不想二次确认？
@@ -564,19 +588,21 @@ rm output/2026-07-18/2026-07-18-summary.md
 
 ### Q10: 邮件回发（`--send`）需要安装什么依赖？
 
-邮件回发需要 `markdown2` 库将日报 Markdown 转换为 HTML 邮件格式。执行：
+邮件回发需要以下 Python 包：
 
-```bash
-pip install markdown2
-```
+| 依赖          | 用途                                         |
+| ------------- | -------------------------------------------- |
+| `openai`    | AI 日报生成（调用 OpenAI 兼容 API）          |
+| `markdown2` | Markdown → HTML 转换                        |
+| `premailer` | CSS 内联到 HTML 元素（邮件客户端兼容性关键） |
 
-或直接安装全部依赖：
+一键安装全部依赖：
 
 ```bash
 pip install -r requirements.txt
 ```
 
-如果不使用 `--send` / `--resend` 功能，则无需安装此依赖。
+如果不使用 `--send` / `--resend` / `--save-html` 功能，可以不安装 `markdown2` 和 `premailer`（但 `openai` 始终需要用于 AI 日报生成）。
 
 ### Q11: 邮件发送失败，提示 `SMTP 发送失败`？
 
@@ -585,17 +611,48 @@ pip install -r requirements.txt
 - 确认企业邮箱已开启 IMAP/SMTP 服务（参考环境准备第 2 步）
 - 某些网络环境可能封锁 SMTP 端口，尝试切换网络后再试
 
-### Q12: `--fresh` 模式与手动删除文件有何区别？
+### Q12: `--regen` 与 `--regen --refetch` 有何区别？
 
-`--fresh` 是一个全自动流程：
+`--regen` 仅重新调用 AI 生成日报，不触碰邮件归档：
 
-1. 扫描并展示所有本地缓存
+1. 扫描并清除指定日期范围内的日报缓存（`-summary.md`）
+2. 调用 AI 重新生成日报并保存
+
+适合修改 Prompt 后想重新生成日报的场景，速度快且不需要重新连 IMAP。
+
+`--regen --refetch` 则进一步重建邮件归档：
+
+1. 清除日报缓存（同上）
 2. 请求用户确认 `[y/N]`
-3. 清除指定日期范围内的邮件归档和日报
+3. 清除指定日期范围内的邮件归档
 4. 通过 IMAP 重新拉取邮件
 5. 调用 AI 重新生成日报
 
-相比手动 `rm` 后重新运行，`--fresh` 一步到位，且确保邮件数据和日报同步刷新。
+适合邮件归档本身不完整（如第一次只拉了部分邮件）或需要强制同步的场景。
+
+### Q13: 为什么日报回发后不会再被自己的系统拉取到？
+
+系统在拉取邮件时会自动跳过发件人地址与 `config.txt` 中 `email` 相同的邮件，避免日报回发造成反馈循环（日报 → 发送 → 拉取 → 日报中包含日报 → ...）。
+
+### Q14: `--save-html` 生成的 HTML 和 `--send` 发送的 HTML 有什么区别？
+
+完全相同。`--save-html` 将渲染后的 HTML 保存到 `output/<日期>/<日期>-summary.html`，方便在浏览器中预览效果；`--send` 则将相同的 HTML 通过 SMTP 发送到邮箱。两者可以同时使用：
+
+```bash
+python daily_summary.py --yesterday --send --save-html
+```
+
+HTML 渲染基于 `email_agent/templates/email_base.html` 响应式模板，通过 `premailer` 将 CSS 内联到 HTML 元素上，确保在 Gmail、Outlook 等主流邮件客户端中正常显示。
+
+### Q15: macOS / Linux 上无法运行 `html2markdown.exe`？
+
+`html-to-markdown/html2markdown.exe` 是 Windows 可执行文件。macOS / Linux 用户可安装 Python 版替代：
+
+```bash
+pip install html2text
+```
+
+然后修改 `email_agent/md_builder.py` 中的 `html_to_markdown()` 函数，将 subprocess 调用替换为 `html2text` 库调用。
 
 ---
 
@@ -608,6 +665,7 @@ pip install -r requirements.txt
 在 AI 生成日报后，通过多种渠道主动推送提醒，让用户无需手动查看即可获知摘要：
 
 - ~~**邮件回发：** 将日报以邮件形式发回给自己，方便在手机上快速浏览~~ ✅ 已实现（`--send` / `--resend` / `--send-to`）
+- ~~**美观 HTML 邮件：** 响应式模板 + premailer CSS 内联，兼容 Gmail/Outlook~~ ✅ 已实现
 - **企业微信 / 微信通知：** 通过 Webhook 或 Bot 将日报摘要推送到个人微信或企业微信群
 - **桌面通知：** 支持 Windows / macOS 系统级弹窗提醒当日待办事项
 
@@ -676,8 +734,8 @@ pip install -r requirements.txt
 
 ### 3. AI 日报生成的第三方服务说明
 
-- `daily_summary.py` 生成的日报功能依赖 **CodeBuddy CLI** 调用云端大语言模型（LLM）处理邮件内容。这意味着：
-  - 邮件归档文件（`output/<日期>/markdown/` 目录下的 `.md` 文件）将被 CodeBuddy CLI 读取并发送至 AI 服务端进行处理。
+- `daily_summary.py` 生成的日报功能通过 **OpenAI 兼容 API** 调用云端大语言模型（LLM）处理邮件内容。这意味着：
+  - 邮件归档文件（`output/<日期>/markdown/` 目录下的 `.md` 文件）将被读取并作为提示词（prompt）发送至 AI 服务端进行处理。
   - AI 服务提供商将按照其自身的隐私政策和数据处理协议处理你的数据。
   - **请在生成日报前再次确认邮件内容不含有你不希望被外部处理的敏感信息。**
 - 你对 AI 生成的日报内容负有最终审核责任。AI 可能存在理解偏差、遗漏关键信息或产生幻觉，**生成内容仅供参考，不应作为决策的唯一依据**。
@@ -690,7 +748,7 @@ pip install -r requirements.txt
   - 敏感信息泄露
   - AI 生成的日报内容错误导致的决策失误
   - 违反企业信息安全规定导致的纪律处分或法律责任
-  - 第三方服务（CodeBuddy AI）的可用性、准确性或服务质量问题
+  - 第三方服务（AI API）的可用性、准确性或服务质量问题
 - 使用本工具可能违反你所在企业的信息安全政策或与邮件服务商的使用协议，**你应自行评估合规风险并独立承担责任**。
 
 ### 5. 用户义务
@@ -698,7 +756,7 @@ pip install -r requirements.txt
 使用本工具，你确认将：
 
 - 仅在自己的企业邮箱账号上使用本工具，**不用于未经授权的第三方邮箱访问**。
-- 妥善保管 `config.txt` 中的客户端专用密码和 CodeBuddy API Key，**不将其分享给他人或提交至公共代码仓库**。
+- 妥善保管 `config.txt` 中的客户端专用密码和 AI API Key，**不将其分享给他人或提交至公共代码仓库**。
 - 定期清理 `output/` 目录中不再需要的邮件归档文件，**避免长期堆积导致本地数据泄露风险**。
 - 如发现任何安全漏洞或异常行为，及时通过项目 Issue 渠道反馈，**不利用漏洞进行任何恶意活动**。
 
