@@ -137,7 +137,7 @@ pip install -r requirements.txt
 | `markdown2` | Markdown → HTML 转换（日报邮件回发）               |
 | `premailer` | CSS 内联到 HTML 元素（邮件客户端兼容性关键步骤）    |
 
-> Windows 用户还需将 `html-to-markdown/html2markdown.exe` 保持在项目目录中（用于将 HTML 邮件转为 Markdown 归档）。macOS / Linux 用户可安装 [`html2text`](https://pypi.org/project/html2text/) 并修改 `email_agent/md_builder.py` 中的调用方式。
+> HTML 转 Markdown 依赖 `html-to-markdown/` 目录下的平台二进制文件，系统会自动根据操作系统和 CPU 架构选择对应版本（已内置 Windows / macOS Intel / macOS Apple Silicon / Linux 四种平台支持）。
 
 ---
 
@@ -644,15 +644,9 @@ python daily_summary.py --yesterday --send --save-html
 
 HTML 渲染基于 `email_agent/templates/email_base.html` 响应式模板，通过 `premailer` 将 CSS 内联到 HTML 元素上，确保在 Gmail、Outlook 等主流邮件客户端中正常显示。
 
-### Q15: macOS / Linux 上无法运行 `html2markdown.exe`？
+### Q15: macOS / Linux 上能运行 html2markdown 吗？
 
-`html-to-markdown/html2markdown.exe` 是 Windows 可执行文件。macOS / Linux 用户可安装 Python 版替代：
-
-```bash
-pip install html2text
-```
-
-然后修改 `email_agent/md_builder.py` 中的 `html_to_markdown()` 函数，将 subprocess 调用替换为 `html2text` 库调用。
+可以！项目已内置 Windows、macOS (Intel)、macOS (Apple Silicon)、Linux 四大平台的 `html2markdown` 二进制文件，存放在 `html-to-markdown/` 目录下。`email_agent/md_builder.py` 会自动根据当前操作系统和 CPU 架构选择对应版本，无需额外配置。
 
 ---
 

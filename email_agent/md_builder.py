@@ -1,5 +1,7 @@
 """Markdown 归档文件生成。调用 html2markdown CLI 将 HTML 转为 Markdown。"""
 import os
+import platform
+import stat
 import subprocess
 import sys
 from typing import List, Optional
@@ -7,24 +9,56 @@ from urllib.parse import quote
 
 from email_agent.utils import format_size
 
-_HTML2MD_EXE = os.path.join(
-    os.path.dirname(os.path.dirname(__file__)),
-    "html-to-markdown", "html2markdown.exe"
-)
+
+def _get_html2md_exe() -> str:
+    """根据当前操作系统和 CPU 架构，返回 html2markdown 可执行文件路径。
+
+    支持 Windows x86_64、macOS (Intel / Apple Silicon)、Linux x86_64。
+    """
+    base = os.path.dirname(os.path.dirname(__file__))
+
+    # 平台 → 目录名映射
+    platform_map = {
+        "win32":  "html-to-markdown_Windows_x86_64",
+        "darwin": "html-to-markdown_Darwin_x86_64",
+        "linux":  "html-to-markdown_Linux_x86_64",
+    }
+
+    dir_name = platform_map.get(sys.platform)
+    if dir_name is None:
+        raise RuntimeError(f"当前平台 {sys.platform} 没有可用的 html2markdown 二进制文件。")
+
+    # macOS 上区分 arm64（Apple Silicon）和 x86_64
+    if sys.platform == "darwin" and platform.machine() == "arm64":
+        dir_name = "html-to-markdown_Darwin_arm64"
+
+    exe_name = "html2markdown.exe" if sys.platform == "win32" else "html2markdown"
+    exe_path = os.path.join(base, "html-to-markdown", dir_name, exe_name)
+
+    if not os.path.isfile(exe_path):
+        raise RuntimeError(
+            f"未找到 html2markdown 可执行文件: {exe_path}\n"
+            f"请确保 html-to-markdown 目录中包含对应平台的二进制文件。"
+        )
+
+    # Unix 平台自动修复可执行权限（git clone 通常保留权限位，但 ZIP 解压可能丢失）
+    if sys.platform != "win32":
+        st = os.stat(exe_path)
+        if not (st.st_mode & stat.S_IXUSR):
+            os.chmod(exe_path, st.st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+    return exe_path
 
 
 def html_to_markdown(html_content: str) -> str:
     """调用 html2markdown CLI 将 HTML 转为 Markdown。
 
-    要求 ``html-to-markdown/html2markdown.exe`` 存在（仅支持 Windows）。
+    自动根据当前操作系统和 CPU 架构选择对应的二进制文件。
+    支持 Windows x86_64、macOS (Intel / Apple Silicon)、Linux x86_64。
     """
-    if sys.platform != "win32":
-        raise RuntimeError(
-            "html2markdown.exe 仅支持 Windows 平台。"
-            "在 Linux/macOS 上请使用 html2text 库作为替代。"
-        )
+    exe = _get_html2md_exe()
     result = subprocess.run(
-        [_HTML2MD_EXE, "--plugin-table", "--plugin-strikethrough"],
+        [exe, "--plugin-table", "--plugin-strikethrough"],
         input=html_content,
         capture_output=True,
         text=True,
