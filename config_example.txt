@@ -20,6 +20,6 @@ ai_api_key = sk-your-key-here
 ai_model = deepseek-v4-flash
 
 # ── AI 生成参数 ──
-ai_thinking = false           # 深度思考模式（DeepSeek），开启后思考 token 也计费
-ai_temperature = 0.3          # 创意度 0.0~2.0，0=严谨 1=发散，日报推荐 0.3
-ai_max_tokens = 8192          # 输出最大 token 数，内容多时可调大
+ai_thinking = false
+ai_temperature = 0.3
+ai_max_tokens = 8192

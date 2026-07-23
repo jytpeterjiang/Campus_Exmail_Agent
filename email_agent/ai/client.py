@@ -61,7 +61,9 @@ def query(
         stop: 停止词列表（最多 16 个），遇到即停止生成
         timeout: 请求超时（秒），默认 120
         response_format: 输出格式，"text" 或 "json"
-        thinking: 是否启用 DeepSeek 思考模式（默认关闭）。
+        thinking: 是否启用思考模式（默认关闭）。
+            DeepSeek → 控制 thinking.type (enabled/disabled)
+            Ollama   → 控制 think 参数
             日报场景无需深度推理，关闭可避免额外思考 token 费用。
         reasoning_effort: 推理强度，"high" 或 "max"。仅 thinking=True 时生效。
         user_id: 自定义用户标识（最大 512 字符），用于 KVCache 缓存隔离与调度隔离
@@ -112,8 +114,11 @@ def query(
     if user_id is not None:
         api_params["user_id"] = user_id
 
-    # 思考模式控制（DeepSeek V4 默认开启，日报场景关掉）
-    body = {"thinking": {"type": "enabled" if thinking else "disabled"}}
+    # 思考模式控制（同时兼容 DeepSeek 的 thinking 和 Ollama 的 think）
+    body = {
+        "thinking": {"type": "enabled" if thinking else "disabled"},
+        "think": thinking,
+    }
     if extra_body:
         body.update(extra_body)
     api_params["extra_body"] = body

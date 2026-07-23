@@ -4,3 +4,6 @@ config.txt
 __pycache__
 code_review_issues.md
 REFACTOR_PLAN.md
+.workbuddy
+config_deepseek.txt
+config_ollama.txt
